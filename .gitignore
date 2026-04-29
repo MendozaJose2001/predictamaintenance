@@ -1,0 +1,38 @@
+# Dependencias
+node_modules/
+venv/
+env/
+__pycache__/
+.venv/
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Logs y bases de datos locales
+*.log
+*.sqlite
+*.db
+
+# Variables de entorno
+.env
+.env.local
+.env.*.local
+
+# Archivos compilados
+*.pyc
+*.pyo
+dist/
+build/
+
+# Editores
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Archivos de empaquetado
+*.zip
+*.tar.gz
+*.rar
+for AI.txt
