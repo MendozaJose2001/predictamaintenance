@@ -103,10 +103,12 @@ def build_windows(
             - time_col: Cycle index, strictly increasing per motor.
             - Feature columns: all remaining columns except unit_col,
               time_col, rul_col, and evento_col are treated as features.
-            - rul_col: Scalar RUL per row. Optional — if absent, y_rul
-              is filled with NaN.
-            - evento_col: Binary event indicator per row. Optional — if
-              absent, evento is filled with 0 (all censored).
+            In the GGS training loop, only RUL is separated before the
+            pipeline. evento enters the pipeline alongside the sensor
+            columns because it is known at runtime in both training
+            (evento=1 at the last cycle of train motors, 0 otherwise)
+            and production (evento=0 always). When RUL is absent,
+            y_rul is NaN for all windows.
         window_size: Number of consecutive cycles per window. Must be
             >= 1. Windows shorter than window_size (early cycles of each
             motor) are discarded.
@@ -150,7 +152,8 @@ def build_windows(
     if window_size < 1:
         raise ValueError(f"window_size must be >= 1, got {window_size}")
 
-    # Determine feature columns — everything except metadata and targets
+    # Determine feature columns — everything except metadata
+    # RUL and evento are separated by the GGS before reaching this function
     meta_cols = {unit_col, time_col, rul_col, evento_col}
     feature_cols = [c for c in df.columns if c not in meta_cols]
 
@@ -158,18 +161,6 @@ def build_windows(
     if unit_col not in df.columns:
         df = df.copy()
         df[unit_col] = 0
-
-    # Handle missing RUL — fill with NaN
-    has_rul = rul_col in df.columns
-    if not has_rul:
-        df = df.copy()
-        df[rul_col] = np.nan
-
-    # Handle missing evento — fill with 0 (all censored, production mode)
-    has_evento = evento_col in df.columns
-    if not has_evento:
-        df = df.copy()
-        df[evento_col] = 0
 
     result: MotorWindows = {}
 
@@ -201,8 +192,13 @@ def build_windows(
 
         feature_vals = motor_df[feature_cols].to_numpy(dtype=float)
         time_vals = motor_df[time_col].to_numpy(dtype=float)
-        rul_vals = motor_df[rul_col].to_numpy(dtype=float)
-        evento_vals = motor_df[evento_col].to_numpy(dtype=int)
+
+        # RUL and evento are optional — absent when pipeline receives
+        # pre-separated X_df from the GGS (no RUL/evento columns)
+        has_rul = rul_col in motor_df.columns
+        has_evento = evento_col in motor_df.columns
+        rul_vals = motor_df[rul_col].to_numpy(dtype=float) if has_rul else None
+        evento_vals = motor_df[evento_col].to_numpy(dtype=int) if has_evento else None
 
         # Number of complete windows for this motor
         n_windows = n_cycles - window_size + 1
@@ -211,10 +207,9 @@ def build_windows(
         t_start = np.empty(n_windows, dtype=float)
         t_stop = np.empty(n_windows, dtype=float)
         evento_out = np.zeros(n_windows, dtype=int)
-        y_rul = np.empty(n_windows, dtype=float)
+        y_rul = np.full(n_windows, np.nan, dtype=float)
 
         for i in range(n_windows):
-            # Window spans cycles [i, i + window_size)
             window_slice = slice(i, i + window_size)
             last_idx = i + window_size - 1
 
@@ -222,12 +217,11 @@ def build_windows(
             t_start[i] = time_vals[i] - 1.0
             t_stop[i] = time_vals[last_idx]
 
-            # evento=1 only if the last cycle of this window is the
-            # observed failure cycle of a train motor
-            evento_out[i] = evento_vals[last_idx]
+            if evento_vals is not None:
+                evento_out[i] = evento_vals[last_idx]
 
-            # RUL at t_stop, clipped to clipping_threshold
-            y_rul[i] = min(rul_vals[last_idx], clipping_threshold)
+            if rul_vals is not None:
+                y_rul[i] = min(rul_vals[last_idx], clipping_threshold)
 
         motor_id_int: int = int(str(motor_id))
         result[motor_id_int] = MotorData(

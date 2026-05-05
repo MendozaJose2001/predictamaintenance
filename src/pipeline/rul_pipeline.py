@@ -35,7 +35,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from src.pipeline.feature_extraction import TSFRESH_FEATURES, extract_window_features
+from src.pipeline.feature_extraction import ALL_FEATURES, extract_window_features
 from src.pipeline.windowing import MotorWindows, build_windows
 
 
@@ -70,12 +70,10 @@ class RULPipeline:
         self,
         window_size: int,
         clipping_threshold: int,
-        n_jobs: int = 1,
         verbose: bool = False,
     ) -> None:
         self.window_size = window_size
         self.clipping_threshold = clipping_threshold
-        self.n_jobs = n_jobs
         self.verbose = verbose
 
     def transform(self, df: pd.DataFrame) -> MotorWindows:
@@ -125,11 +123,10 @@ class RULPipeline:
                 f"— {t1 - t0:.2f}s"
             )
 
-        # Nodo 3 — tsfresh feature extraction
+        # Nodo 3 — numpy feature extraction
         motor_features = extract_window_features(
             motor_windows=motor_windows,
-            feature_config=TSFRESH_FEATURES,
-            n_jobs=self.n_jobs,
+            features=ALL_FEATURES,
         )
         t2 = time.perf_counter()
         if self.verbose:
