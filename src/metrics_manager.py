@@ -1,175 +1,172 @@
-from lifelines.utils import concordance_index
+"""Metrics for RUL estimation evaluation.
+
+This module implements the four metrics used to evaluate all RUL models
+in PredictaMaintenance. All metrics operate directly on prediction and
+ground truth arrays — no sklearn Pipeline dependency.
+
+Metrics:
+    S-Score:  NASA asymmetric penalty. Penalizes late predictions more
+              severely than early ones. Lower is better.
+    C-Index:  Concordance index. Measures ranking quality. Higher is better.
+    MAE:      Mean absolute error on piecewise-clipped RUL. Lower is better.
+    RMSE:     Root mean squared error on piecewise-clipped RUL. Lower is better.
+
+Honest evaluation:
+    All metrics clip both predictions and ground truth to clipping_threshold
+    before computation. This ensures evaluation in the same piecewise RUL
+    space used during training — preventing artificially low errors from
+    the flat region where all motors are healthy.
+"""
+
+from typing import Callable
 import numpy as np
-from typing import Any
+from lifelines.utils import concordance_index
 
 
 class Metrics:
-    """A collection of specialized scoring metrics for RUL estimation.
+    """Collection of RUL evaluation metrics.
 
-    Implements an 'Honest Evaluation' framework where metrics are dynamically
-    synchronized with the model's internal clipping threshold during cross-validation
-    or grid search. Both predictions and ground truth are clipped to the same space
-    before metric computation.
+    All methods receive predictions and ground truth as numpy arrays
+    directly, along with the clipping threshold for honest evaluation.
+    No sklearn Pipeline dependency.
     """
 
     @staticmethod
-    def _comun_values(
-        estimator: Any,
-        X: np.ndarray,
-        y_true: np.ndarray
+    def _clip_both(
+        y_pred: np.ndarray,
+        y_true: np.ndarray,
+        clipping_threshold: int,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Computes the fundamental components for metric calculation.
-
-        Synchronizes evaluation by clipping both predictions and ground truth to
-        the model's threshold, ensuring a consistent piecewise RUL comparison.
-        The threshold is retrieved dynamically from the pipeline's model step.
+        """Clips both predictions and ground truth to clipping_threshold.
 
         Args:
-            estimator: Fitted sklearn Pipeline containing a 'model' step with a
-                clipping_threshold attribute.
-            X: Input feature matrix of shape (n_samples, n_features).
-            y_true: Original linear RUL ground truth of shape (n_samples,).
-                Values are not pre-clipped.
+            y_pred: Predicted RUL array of shape (n_samples,).
+            y_true: True RUL array of shape (n_samples,).
+            clipping_threshold: Maximum RUL value for clipping.
 
         Returns:
-            Tuple of (diff, y_true_piecewise, y_pred) where:
-                diff: Prediction error (y_pred - y_true_piecewise), shape (n_samples,).
-                y_true_piecewise: Clipped ground truth, shape (n_samples,).
-                y_pred: Clipped predictions, shape (n_samples,).
+            Tuple of (diff, y_true_clipped, y_pred_clipped) where:
+                diff:           y_pred_clipped - y_true_clipped
+                y_true_clipped: ground truth clipped to threshold
+                y_pred_clipped: predictions clipped to threshold
         """
-        threshold: int = estimator.named_steps['model'].clipping_threshold
-
-        y_pred: np.ndarray = np.minimum(estimator.predict(X), threshold)
-        y_true_piecewise: np.ndarray = np.minimum(y_true, threshold)
-
-        diff: np.ndarray = y_pred - y_true_piecewise
-
-        return diff, y_true_piecewise, y_pred
+        y_pred_clipped = np.minimum(y_pred, clipping_threshold)
+        y_true_clipped = np.minimum(y_true, clipping_threshold)
+        diff = y_pred_clipped - y_true_clipped
+        return diff, y_true_clipped, y_pred_clipped
 
     @classmethod
-    def s_score_metric(
+    def s_score(
         cls,
-        estimator: Any,
-        X: np.ndarray,
-        y_true: np.ndarray
+        y_pred: np.ndarray,
+        y_true: np.ndarray,
+        clipping_threshold: int = 125,
     ) -> float:
-        """Calculates the NASA S-score with piecewise honest evaluation.
+        """NASA S-Score — asymmetric penalty for late vs early predictions.
 
-        Asymmetric penalty function that penalizes late predictions (overestimation)
-        more severely than early ones, reflecting the higher operational risk of
-        unexpected failure versus premature intervention.
+        Penalizes late predictions (overestimation) more severely than
+        early ones, reflecting the higher operational risk of unexpected
+        failure versus premature maintenance intervention.
 
-        Penalty terms:
-            Early prediction (diff < 0): exp(-diff / 13) - 1
-            Late prediction  (diff >= 0): exp(diff / 10) - 1
+        Penalty:
+            diff < 0  (early): exp(-diff / 13) - 1
+            diff >= 0 (late):  exp( diff / 10) - 1
 
         Args:
-            estimator: Fitted sklearn Pipeline containing a 'model' step.
-            X: Input feature matrix of shape (n_samples, n_features).
-            y_true: Original linear RUL ground truth of shape (n_samples,).
+            y_pred: Predicted RUL array.
+            y_true: True RUL array.
+            clipping_threshold: RUL clipping value. Defaults to 125.
 
         Returns:
-            Mean S-score as a positive float. Lower values indicate better performance.
+            Mean S-Score as float. Lower is better.
         """
-        diff, _, _ = cls._comun_values(estimator, X, y_true)
-
-        s_score: float = float(np.mean(
+        diff, _, _ = cls._clip_both(y_pred, y_true, clipping_threshold)
+        return float(np.mean(
             np.where(
                 diff < 0,
                 np.exp(-diff / 13.0) - 1,
-                np.exp(diff / 10.0) - 1
+                np.exp(diff  / 10.0) - 1,
             )
         ))
 
-        return s_score
-
     @classmethod
-    def c_index_metric(
+    def c_index(
         cls,
-        estimator: Any,
-        X: np.ndarray,
-        y_true: np.ndarray
+        y_pred: np.ndarray,
+        y_true: np.ndarray,
+        clipping_threshold: int = 125,
     ) -> float:
-        """Calculates the Concordance Index (C-index).
+        """Concordance Index — ranking quality of RUL predictions.
 
-        Measures the model's ability to correctly rank the relative remaining life
-        of different units. A value of 0.5 corresponds to random ordering and 1.0
-        to perfect discrimination.
+        Measures the proportion of pairs correctly ranked by the model.
+        0.5 = random, 1.0 = perfect discrimination.
 
         Args:
-            estimator: Fitted sklearn Pipeline containing a 'model' step.
-            X: Input feature matrix of shape (n_samples, n_features).
-            y_true: Original linear RUL ground truth of shape (n_samples,).
+            y_pred: Predicted RUL array.
+            y_true: True RUL array.
+            clipping_threshold: RUL clipping value. Defaults to 125.
 
         Returns:
-            C-index as a float in [0.5, 1.0]. Higher values indicate better ranking.
+            C-Index as float in [0, 1]. Higher is better.
         """
-        _, y_true_piecewise, y_pred = cls._comun_values(estimator, X, y_true)
-
-        return float(concordance_index(y_true_piecewise, y_pred))
+        _, y_true_clipped, y_pred_clipped = cls._clip_both(
+            y_pred, y_true, clipping_threshold
+        )
+        return float(concordance_index(y_true_clipped, y_pred_clipped))
 
     @classmethod
-    def mae_metric(
+    def mae(
         cls,
-        estimator: Any,
-        X: np.ndarray,
-        y_true: np.ndarray
+        y_pred: np.ndarray,
+        y_true: np.ndarray,
+        clipping_threshold: int = 125,
     ) -> float:
-        """Calculates the Piecewise Mean Absolute Error (MAE).
-
-        Measures the average magnitude of prediction error relative to the clipped
-        ground truth. Less sensitive to outliers than RMSE.
+        """Mean Absolute Error on piecewise-clipped RUL.
 
         Args:
-            estimator: Fitted sklearn Pipeline containing a 'model' step.
-            X: Input feature matrix of shape (n_samples, n_features).
-            y_true: Original linear RUL ground truth of shape (n_samples,).
+            y_pred: Predicted RUL array.
+            y_true: True RUL array.
+            clipping_threshold: RUL clipping value. Defaults to 125.
 
         Returns:
-            MAE as a positive float. Lower values indicate better performance.
+            MAE as float. Lower is better.
         """
-        diff, _, _ = cls._comun_values(estimator, X, y_true)
-
+        diff, _, _ = cls._clip_both(y_pred, y_true, clipping_threshold)
         return float(np.mean(np.abs(diff)))
 
     @classmethod
-    def rmse_metric(
+    def rmse(
         cls,
-        estimator: Any,
-        X: np.ndarray,
-        y_true: np.ndarray
+        y_pred: np.ndarray,
+        y_true: np.ndarray,
+        clipping_threshold: int = 125,
     ) -> float:
-        """Calculates the Piecewise Root Mean Squared Error (RMSE).
-
-        Measures the square root of the average squared prediction error relative
-        to the clipped ground truth. More sensitive to outliers than MAE due to
-        the quadratic nature of the penalty.
+        """Root Mean Squared Error on piecewise-clipped RUL.
 
         Args:
-            estimator: Fitted sklearn Pipeline containing a 'model' step.
-            X: Input feature matrix of shape (n_samples, n_features).
-            y_true: Original linear RUL ground truth of shape (n_samples,).
+            y_pred: Predicted RUL array.
+            y_true: True RUL array.
+            clipping_threshold: RUL clipping value. Defaults to 125.
 
         Returns:
-            RMSE as a positive float. Lower values indicate better performance.
+            RMSE as float. Lower is better.
         """
-        diff, _, _ = cls._comun_values(estimator, X, y_true)
-
+        diff, _, _ = cls._clip_both(y_pred, y_true, clipping_threshold)
         return float(np.sqrt(np.mean(diff ** 2)))
 
     @classmethod
-    def get_metrics(cls) -> dict[str, Any]:
-        """Returns a dictionary of scorers compatible with scikit-learn.
+    def get_metrics(cls) -> dict[str, Callable[..., float]]:
+        """Returns all metrics as a dict of callables.
 
-        Each scorer follows the (estimator, X, y_true) signature accepted directly
-        by GridSearchCV without requiring make_scorer wrapping.
+        Each callable has signature:
+            func(y_pred, y_true, clipping_threshold=125) -> float
 
         Returns:
-            Dictionary mapping metric names to callable scorer functions.
+            Dict mapping metric names to callable functions.
         """
         return {
-            'S_score': cls.s_score_metric,
-            'C_index': cls.c_index_metric,
-            'MAE': cls.mae_metric,
-            'RMSE': cls.rmse_metric
+            'S_score': cls.s_score,
+            'C_index': cls.c_index,
+            'MAE':     cls.mae,
+            'RMSE':    cls.rmse,
         }

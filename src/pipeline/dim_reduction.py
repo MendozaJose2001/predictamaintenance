@@ -7,13 +7,23 @@ preserves the same MotorWindows hierarchy with X_windows reduced to
 (n_windows, n_components).
 
 Design decisions:
+    Internal RobustScaler before PCA:
+        Features extracted by Nodo 3 (median, abs_energy, slope, etc.) have
+        very different magnitudes. abs_energy = sum(x²) over window_size steps
+        produces values ~100x larger than other features like slope (~0.5).
+        Without scaling, PCA is biased toward high-magnitude features and
+        ignores subtle but informative ones. A RobustScaler is applied
+        internally before PCA to equalize feature contributions.
+        RobustScaler is preferred over StandardScaler because abs_energy
+        and autocorrelation features can have heavy-tailed distributions.
+        This scaler is fitted exclusively on training data (fit() call)
+        and applied to validation data (transform() call) — no leakage.
+
     Global PCA:
         PCA is fitted on the concatenation of all motor feature matrices
-        in the input MotorWindows. This produces a single global projection
-        shared across all motors — consistent with the standard approach in
-        the PHM literature (Alomari et al. 2023) and ensures that the
-        principal components capture variance across the entire fold, not
-        per-motor variance.
+        in the input MotorWindows after internal scaling. This produces a
+        single global projection shared across all motors — consistent with
+        the standard approach in the PHM literature (Alomari et al. 2023).
 
     Hierarchy preservation:
         After global fitting and transformation, the reduced feature matrix
@@ -41,6 +51,7 @@ Design decisions:
 import numpy as np
 from sklearn.base import BaseEstimator
 from sklearn.decomposition import PCA
+from sklearn.preprocessing import RobustScaler
 from sklearn.utils.validation import check_is_fitted
 
 from src.pipeline.windowing import MotorData, MotorWindows
@@ -49,15 +60,20 @@ from src.pipeline.windowing import MotorData, MotorWindows
 class DimReducer(BaseEstimator):
     """PCA-based dimensionality reducer for the RUL pipeline (Nodo 4).
 
-    Fits a single global PCA on the concatenated feature matrices of all
-    motors in the input MotorWindows, then redistributes the reduced
-    representations back to each motor preserving the MotorWindows hierarchy.
+    Applies RobustScaler followed by PCA on the concatenated feature
+    matrices of all motors in the input MotorWindows. The RobustScaler
+    equalizes feature magnitudes before PCA to prevent high-magnitude
+    features (e.g. abs_energy) from dominating the principal components.
+
+    Both the scaler and PCA are fitted exclusively on training data and
+    applied to validation/test data without refitting — no data leakage.
 
     Args:
         n_components: Number of principal components to retain. Acts as a
             GGS hyperparameter — typical range is 5 to 30. Defaults to 10.
 
     Attributes:
+        scaler_: Fitted RobustScaler instance. Available after fit().
         pca_: Fitted sklearn PCA instance. Available after fit().
         pc_names_: List of PC column names ['PC_1', ..., 'PC_n']. Available
             after fit().
@@ -71,11 +87,11 @@ class DimReducer(BaseEstimator):
         motor_windows: MotorWindows,
         y: object = None,
     ) -> 'DimReducer':
-        """Fits PCA on the concatenated feature matrices of all motors.
+        """Fits RobustScaler and PCA on the concatenated feature matrices.
 
-        Concatenates X_windows from all motors into a single matrix and
-        fits a global PCA. The fitted PCA captures variance across the
-        entire fold rather than per-motor variance.
+        Concatenates X_windows from all motors, fits a RobustScaler to
+        equalize feature magnitudes, then fits a global PCA on the scaled
+        features. Both transformers are stored for use in transform().
 
         Args:
             motor_windows: MotorWindows from Nodo 3. Each motor entry must
@@ -98,7 +114,7 @@ class DimReducer(BaseEstimator):
                     f"Nodo 3 must be applied before Nodo 4."
                 )
 
-        # Concatenate all motors for global PCA fitting
+        # Concatenate all motors for global fitting
         X_all = np.concatenate(
             [data['X_windows'] for data in motor_windows.values()],
             axis=0
@@ -111,8 +127,14 @@ class DimReducer(BaseEstimator):
                 f"features n_features={n_features}."
             )
 
+        # Internal RobustScaler — equalizes feature magnitudes before PCA.
+        # Fitted on training data only to prevent leakage.
+        self.scaler_: RobustScaler = RobustScaler()
+        X_scaled = self.scaler_.fit_transform(X_all)
+
+        # Global PCA on scaled features
         self.pca_: PCA = PCA(n_components=self.n_components)
-        self.pca_.fit(X_all)
+        self.pca_.fit(X_scaled)
 
         self.pc_names_: list[str] = [
             f'PC_{i+1}' for i in range(self.n_components)
@@ -125,12 +147,13 @@ class DimReducer(BaseEstimator):
         motor_windows: MotorWindows,
         y: object = None,
     ) -> MotorWindows:
-        """Transforms each motor's feature matrix using the fitted PCA.
+        """Transforms each motor's feature matrix using scaler and PCA.
 
-        Applies the global PCA fitted in fit() to each motor's X_windows
-        independently, then reconstructs the MotorWindows dictionary with
-        reduced feature matrices. All other fields (t_start, t_stop, evento,
-        y_rul) pass through unchanged. feature_names is updated to PC names.
+        Applies the RobustScaler fitted in fit() followed by the global PCA
+        to each motor's X_windows independently, then reconstructs the
+        MotorWindows dictionary with reduced feature matrices. All other
+        fields (t_start, t_stop, evento, y_rul) pass through unchanged.
+        feature_names is updated to PC names.
 
         Args:
             motor_windows: MotorWindows from Nodo 3. Must contain the same
@@ -145,7 +168,7 @@ class DimReducer(BaseEstimator):
             NotFittedError: If fit() has not been called.
             ValueError: If any motor's X_windows is not 2-dimensional.
         """
-        check_is_fitted(self, ['pca_', 'pc_names_'])
+        check_is_fitted(self, ['scaler_', 'pca_', 'pc_names_'])
 
         result: MotorWindows = {}
 
@@ -156,7 +179,9 @@ class DimReducer(BaseEstimator):
                     f"(n_windows, n_features), got shape {data['X_windows'].shape}."
                 )
 
-            X_reduced = self.pca_.transform(data['X_windows'])
+            # Apply scaler then PCA — same order as fit()
+            X_scaled = self.scaler_.transform(data['X_windows'])
+            X_reduced = self.pca_.transform(X_scaled)
 
             result[motor_id] = MotorData(
                 X_windows=X_reduced,
@@ -182,5 +207,5 @@ class DimReducer(BaseEstimator):
         Raises:
             NotFittedError: If fit() has not been called.
         """
-        check_is_fitted(self, ['pca_'])
+        check_is_fitted(self, ['scaler_', 'pca_'])
         return self.pca_.explained_variance_ratio_

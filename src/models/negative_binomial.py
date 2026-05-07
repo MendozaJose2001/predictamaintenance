@@ -1,12 +1,48 @@
 # ./src/models/negative_binomial.py
 
+"""Negative Binomial GLM for RUL estimation (new pipeline version).
+
+This module implements a Negative Binomial GLM as a BaseRULModel subclass
+compatible with the sliding window pipeline (Nodos 1-4). Unlike the original
+implementation, this version does not load per-motor CSVs — it receives the
+feature matrix directly from the GGS loop after DimReducer.transform() and
+flatten_windows().
+
+Model rationale:
+    The Negative Binomial GLM is the primary model of this project because:
+    - It converges reliably on C-MAPSS FD001 under GroupKFold CV
+    - It produces native confidence intervals via MLE (the only classical
+      model in this project with rigorous individual prediction uncertainty)
+    - It handles overdispersion in RUL count data via the alpha parameter
+    - It is interpretable and computationally efficient
+
+Link functions:
+    Three link functions are supported:
+    - log:      guarantees strictly positive predictions (recommended)
+    - identity: linear predictor, may produce negative predictions
+    - sqrt:     intermediate, common for count data with moderate range
+
+Confidence intervals:
+    Prediction intervals are derived from the GLM's linear predictor
+    variance. For a new observation x, the variance of the linear
+    predictor is Var(eta) = x^T * Cov(beta) * x, where Cov(beta) is
+    the parameter covariance matrix from MLE. The CI on the response
+    scale is obtained by back-transforming the CI on the link scale.
+    This is only available when alpha_reg=0 (standard MLE fit).
+
+prepare_training_data:
+    Not implemented — this model uses the sliding window pipeline
+    (Nodos 1-4). The GGS manager calls fit() directly with the output
+    of flatten_windows() after DimReducer.transform().
+"""
+
 import warnings
 
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 from sklearn.base import BaseEstimator, RegressorMixin
-from sklearn.utils.validation import check_X_y, check_array
+from sklearn.utils.validation import check_array, check_is_fitted
 from statsmodels.genmod.generalized_linear_model import GLMResultsWrapper
 from statsmodels.base.elastic_net import RegularizedResultsWrapper
 
@@ -16,29 +52,38 @@ from src.models.base_model import BaseRULModel
 class NegativeBinomialPiecewise(BaseRULModel, BaseEstimator, RegressorMixin):
     """Negative Binomial GLM for piecewise RUL estimation.
 
-    Wraps a statsmodels Negative Binomial GLM as a scikit-learn compatible
-    estimator. The target is clipped to a piecewise threshold during training,
-    reflecting the operational assumption that very early degradation stages
-    carry limited prognostic information. Predictions are also clipped to the
-    same threshold to ensure consistency with the training space.
+    Wraps a statsmodels Negative Binomial GLM as a sklearn-compatible
+    estimator. Receives PCA-reduced window features from the sliding
+    window pipeline (Nodo 4 output) and predicts clipped RUL.
 
-    Supports elastic net regularization via statsmodels fit_regularized and
-    three link functions: log, identity, and sqrt.
+    The target is expected to be pre-clipped by the pipeline's
+    clipping_threshold — no additional clipping is applied to y during
+    fit(). Predictions are clipped to clipping_threshold for consistency
+    with the piecewise RUL convention.
+
+    Supports elastic net regularization and three link functions.
+    Confidence intervals are available via predict_with_confidence()
+    when alpha_reg=0 (standard MLE fit).
 
     Args:
         alpha: Dispersion parameter of the Negative Binomial distribution.
-            Controls the degree of overdispersion relative to a Poisson model.
-            Defaults to 1.0.
-        clipping_threshold: Maximum RUL value used for piecewise clipping of
-            both the training target and the predictions. Defaults to 125.
-        alpha_reg: Regularization strength. When 0.0, no regularization is
-            applied and the standard MLE fit is used. Defaults to 0.0.
-        l1_ratio: Mixing parameter for elastic net regularization. A value of
-            1.0 corresponds to pure L1 (Lasso) and 0.0 to pure L2 (Ridge).
-            Only used when alpha_reg > 0. Defaults to 0.5.
-        link_type: Link function for the GLM. One of 'log', 'identity', or
-            'sqrt'. The log link guarantees strictly positive predictions and
-            is recommended for RUL estimation. Defaults to 'log'.
+            Controls overdispersion relative to Poisson. Defaults to 1.0.
+        clipping_threshold: Maximum RUL value for prediction clipping.
+            Should match the clipping_threshold used in the pipeline's
+            build_windows(). Defaults to 125.
+        alpha_reg: Regularization strength for elastic net. When 0.0,
+            standard MLE fit is used and CIs are available. Defaults to 0.0.
+        l1_ratio: Elastic net mixing parameter. 1.0 = pure L1 (Lasso),
+            0.0 = pure L2 (Ridge). Only used when alpha_reg > 0.
+            Defaults to 0.5.
+        link_type: GLM link function. One of 'log', 'identity', or 'sqrt'.
+            Log link guarantees strictly positive predictions and is
+            recommended for RUL estimation. Defaults to 'log'.
+
+    Attributes:
+        model_stats_: Fitted statsmodels GLMResultsWrapper or
+            RegularizedResultsWrapper. Available after fit().
+        is_fitted_: Boolean flag indicating successful fit.
     """
 
     def __init__(
@@ -47,7 +92,7 @@ class NegativeBinomialPiecewise(BaseRULModel, BaseEstimator, RegressorMixin):
         clipping_threshold: int = 125,
         alpha_reg: float = 0.0,
         l1_ratio: float = 0.5,
-        link_type: str = 'log'
+        link_type: str = 'log',
     ) -> None:
         self.alpha = alpha
         self.clipping_threshold = clipping_threshold
@@ -58,101 +103,90 @@ class NegativeBinomialPiecewise(BaseRULModel, BaseEstimator, RegressorMixin):
         self.model_stats_: GLMResultsWrapper | RegularizedResultsWrapper | None = None
 
     def _get_link(self) -> sm.families.links.Link:
-        """Returns the statsmodels link function corresponding to link_type.
+        """Returns the statsmodels link function for link_type.
 
-        Falls back to the log link if an unrecognized link_type is provided.
+        Falls back to log link if link_type is unrecognized.
 
         Returns:
-            A statsmodels link function instance.
+            statsmodels link function instance.
         """
         links: dict[str, sm.families.links.Link] = {
-            'log': sm.families.links.Log(),
+            'log':      sm.families.links.Log(),
             'identity': sm.families.links.Identity(),
-            'sqrt': sm.families.links.Sqrt()
+            'sqrt':     sm.families.links.Sqrt(),
         }
         return links.get(self.link_type, sm.families.links.Log())
 
     def prepare_training_data(
         self,
-        list_ids: np.ndarray
-    ) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray]:
-        """Prepares training data in the format required by the Negative Binomial model.
+        list_ids: np.ndarray,
+    ) -> tuple:
+        """Not implemented — this model uses the sliding window pipeline.
 
-        Loads per-motor CSV files and assembles a feature matrix, a scalar RUL
-        target array, and a groups array for GroupKFold cross-validation. Each
-        row in the output corresponds to a single observation cycle of a motor.
+        NegativeBinomialPiecewise is designed for the new Nodo 1-4 pipeline
+        and does not load per-motor CSVs. Call fit() directly with the output
+        of flatten_windows() after DimReducer.transform().
 
-        For this model family, y_fit and y_metrics are identical — both are
-        scalar RUL arrays — since the Negative Binomial model trains directly
-        on RUL targets and the evaluation metrics operate on the same space.
+        Raises:
+            NotImplementedError: Always.
+        """
+        raise NotImplementedError(
+            "NegativeBinomialPiecewise uses the sliding window pipeline "
+            "(Nodos 1-4). Call fit(X, y_rul) directly with the output of "
+            "flatten_windows() after DimReducer.transform(). "
+            "y_rul must be the pre-clipped RUL array from flatten_windows()."
+        )
+
+    def fit(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        **kwargs: object,
+    ) -> 'NegativeBinomialPiecewise':
+        """Fits the Negative Binomial GLM on PCA-reduced window features.
+
+        The target y is expected to be pre-clipped by the pipeline
+        (y_rul from flatten_windows). No additional clipping is applied
+        during fit — the pipeline owns the clipping convention.
+
+        When alpha_reg=0 (default), uses standard MLE fit and the
+        resulting GLMResultsWrapper supports confidence interval
+        computation via predict_with_confidence(). When alpha_reg>0,
+        uses elastic net regularization (fit_regularized) and CIs
+        are not available.
+
+        On fitting failure, emits RuntimeWarning and sets is_fitted_=False,
+        allowing the GGS loop to handle failed configurations gracefully.
 
         Args:
-            list_ids: Array of motor unit identifiers whose CSV files will be
-                loaded from data/clean/.
+            X: Feature matrix of shape (n_windows, n_components).
+                Output of DimReducer.transform() after flatten_windows().
+            y: Pre-clipped RUL array of shape (n_windows,).
+                y_rul from flatten_windows() — already clipped to
+                clipping_threshold by build_windows().
+            **kwargs: Accepts but ignores 'groups' for GGS compatibility.
 
         Returns:
-            Tuple of (X, y_fit, y_metrics, groups) where:
-                X: Feature matrix of shape (n_samples, n_features), excluding
-                    time_in_cycles, RUL, and evento columns.
-                y_fit: Scalar RUL array of shape (n_samples,).
-                y_metrics: Identical to y_fit for this model family.
-                groups: Integer array of shape (n_samples,) mapping each row
-                    to its motor unit identifier, used for GroupKFold.
+            Self.
         """
-        X_list: list[pd.DataFrame] = []
-        y_count_list: list[float] = []
-        groups_list: list[int] = []
-
-        for idx in list_ids:
-            df_motor = pd.read_csv(f'data/clean/data_motor_{idx}.csv')
-
-            X_motor = df_motor.drop(columns=['time_in_cycles', 'RUL', 'evento'])
-            X_list.append(X_motor)
-
-            y_count_list.extend(df_motor['RUL'].tolist())
-            groups_list.extend([idx] * len(df_motor))
-
-        X = pd.concat(X_list, ignore_index=True)
-        y_count = np.array(y_count_list)
-        groups = np.array(groups_list)
-
-        return X, y_count, y_count, groups
-
-    def fit(self, X: np.ndarray, y: np.ndarray, **kwargs: object) -> 'NegativeBinomialPiecewise':
-        """Fits the Negative Binomial GLM on piecewise-clipped RUL targets.
-
-        Applies piecewise clipping to the target before fitting, capping all
-        RUL values at clipping_threshold. When alpha_reg > 0, fits using
-        elastic net regularization via statsmodels fit_regularized. On fitting
-        failure, emits a RuntimeWarning with the error details and marks the
-        estimator as not fitted, allowing GridSearchCV to handle the failure
-        gracefully via error_score.
-
-        Args:
-            X: Feature matrix of shape (n_samples, n_features).
-            y: RUL target array of shape (n_samples,). Values are not
-                pre-clipped; clipping is applied internally.
-
-        Returns:
-            Self, following the scikit-learn estimator convention.
-        """
-        X, y = check_X_y(X, y, accept_sparse=True)
-        y_piecewise = np.minimum(y, self.clipping_threshold)
-        X_with_const = sm.add_constant(X, has_constant='add')
-
         try:
+            X_arr = check_array(X)
+            y_arr = np.asarray(y, dtype=float)
+
+            X_with_const = sm.add_constant(X_arr, has_constant='add')
+
             family_nb = sm.families.NegativeBinomial(
                 alpha=self.alpha,
-                link=self._get_link()
+                link=self._get_link(),
             )
-            model = sm.GLM(y_piecewise, X_with_const, family=family_nb)
+            model = sm.GLM(y_arr, X_with_const, family=family_nb)
 
             if self.alpha_reg > 0:
                 self.model_stats_ = model.fit_regularized(
                     method='elastic_net',
                     alpha=self.alpha_reg,
                     L1_wt=self.l1_ratio,
-                    maxiter=500
+                    maxiter=500,
                 )
             else:
                 self.model_stats_ = model.fit()
@@ -164,33 +198,107 @@ class NegativeBinomialPiecewise(BaseRULModel, BaseEstimator, RegressorMixin):
             self.model_stats_ = None
             warnings.warn(
                 f"Fit failed for link='{self.link_type}', "
-                f"alpha_reg={self.alpha_reg}: {type(e).__name__}: {e}",
+                f"alpha={self.alpha}, alpha_reg={self.alpha_reg}: "
+                f"{type(e).__name__}: {e}",
                 RuntimeWarning,
-                stacklevel=2
+                stacklevel=2,
             )
 
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:
-        """Generates clipped RUL predictions for the given input features.
+        """Generates clipped RUL predictions for the given feature matrix.
 
         Returns NaN predictions if the model was not successfully fitted,
-        allowing GridSearchCV to handle failed configurations via error_score.
-        Predictions are clipped to clipping_threshold to ensure consistency
+        allowing the GGS loop to handle failed configurations gracefully.
+        Predictions are clipped to clipping_threshold for consistency
         with the piecewise training space.
 
         Args:
-            X: Feature matrix of shape (n_samples, n_features).
+            X: Feature matrix of shape (n_windows, n_components).
 
         Returns:
-            Predicted RUL array of shape (n_samples,), clipped to
-            clipping_threshold. Contains NaN values if the model is not fitted.
+            Predicted RUL array of shape (n_windows,), clipped to
+            clipping_threshold. Contains NaN if the model is not fitted.
         """
         if not self.is_fitted_ or self.model_stats_ is None:
             return np.full(X.shape[0], np.nan)
 
-        X = check_array(X)
-        X_with_const = sm.add_constant(X, has_constant='add')
+        X_arr = check_array(X)
+        X_with_const = sm.add_constant(X_arr, has_constant='add')
         raw_predictions = self.model_stats_.predict(X_with_const)
 
         return np.minimum(raw_predictions, self.clipping_threshold)
+
+    def predict_with_confidence(
+        self,
+        X: np.ndarray,
+        confidence: float = 0.95,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Generates RUL predictions with confidence intervals via MLE.
+
+        Computes prediction intervals on the link scale using the parameter
+        covariance matrix from MLE, then back-transforms to the response
+        scale. Only available when alpha_reg=0 (standard MLE fit).
+
+        The variance of the linear predictor for a new observation x is:
+            Var(eta) = x^T * Cov(beta) * x
+        The CI on the link scale is:
+            [eta - z * sqrt(Var(eta)), eta + z * sqrt(Var(eta))]
+        Back-transformed to the response scale via the inverse link function.
+
+        Args:
+            X: Feature matrix of shape (n_windows, n_components).
+            confidence: Confidence level for the interval. Defaults to 0.95.
+
+        Returns:
+            Tuple of (y_pred, ic_lower, ic_upper) each of shape (n_windows,),
+            clipped to clipping_threshold.
+
+        Raises:
+            NotFittedError: If fit() has not been called.
+            ValueError: If model was fitted with alpha_reg > 0 (regularized
+                fit does not produce a covariance matrix).
+        """
+        if not self.is_fitted_ or self.model_stats_ is None:
+            from sklearn.exceptions import NotFittedError
+            raise NotFittedError(
+                f"This {type(self).__name__} instance is not fitted yet. "
+                "Call 'fit' before using 'predict_with_confidence'."
+            )
+
+        if not isinstance(self.model_stats_, GLMResultsWrapper):
+            raise ValueError(
+                "Confidence intervals require standard MLE fit (alpha_reg=0). "
+                "Regularized fits do not produce a parameter covariance matrix."
+            )
+
+        from scipy import stats as scipy_stats
+
+        X_arr = check_array(X)
+        X_with_const = sm.add_constant(X_arr, has_constant='add')
+
+        # Linear predictor for each observation
+        eta = X_with_const @ self.model_stats_.params
+
+        # Variance of linear predictor: diag(X @ Cov(beta) @ X^T)
+        cov_beta = self.model_stats_.cov_params()
+        var_eta = np.einsum('ij,jk,ik->i', X_with_const, cov_beta, X_with_const)
+        se_eta = np.sqrt(np.maximum(var_eta, 0.0))
+
+        # z critical value for the requested confidence level
+        z = scipy_stats.norm.ppf((1 + confidence) / 2)
+
+        # CI on link scale
+        eta_lower = eta - z * se_eta
+        eta_upper = eta + z * se_eta
+
+        # Back-transform to response scale via inverse link.
+        # Use the fitted model's family link to avoid type inference issues.
+        inv_link = self.model_stats_.family.link.inverse
+
+        y_pred   = np.minimum(np.maximum(inv_link(eta),       0.0), self.clipping_threshold)
+        ic_lower = np.minimum(np.maximum(inv_link(eta_lower), 0.0), self.clipping_threshold)
+        ic_upper = np.minimum(np.maximum(inv_link(eta_upper), 0.0), self.clipping_threshold)
+
+        return y_pred, ic_lower, ic_upper

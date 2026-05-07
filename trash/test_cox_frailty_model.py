@@ -56,7 +56,7 @@ def fitted_cox_frailty(
 ) -> CoxFrailty:
     """Returns a fitted CoxFrailty model using the real pipeline infrastructure."""
     from sklearn.pipeline import Pipeline
-    from src.mad_scaler import MADScaler
+    from mad_scaler import MADScaler
 
     X, y_surv, groups, _ = synthetic_survival_data
     model = CoxFrailty(distribution='gamma', clipping_threshold=80)
@@ -240,7 +240,7 @@ class TestFit:
     ) -> CoxFrailty:
         """Fits CoxFrailty through the real pipeline infrastructure."""
         from sklearn.pipeline import Pipeline
-        from src.mad_scaler import MADScaler
+        from mad_scaler import MADScaler
 
         model = CoxFrailty(
             distribution=distribution,
@@ -279,7 +279,7 @@ class TestFit:
     ):
         """fit() must return self for sklearn pipeline compatibility."""
         from sklearn.pipeline import Pipeline
-        from src.mad_scaler import MADScaler
+        from mad_scaler import MADScaler
 
         X, y_surv, groups, _ = synthetic_survival_data
         model = CoxFrailty(distribution='gamma')
@@ -303,7 +303,7 @@ class TestFit:
     ):
         """On fitting failure, is_fitted_ must remain False."""
         from sklearn.pipeline import Pipeline
-        from src.mad_scaler import MADScaler
+        from mad_scaler import MADScaler
 
         X, y_surv, groups, _ = synthetic_survival_data
         model = CoxFrailty(distribution='gamma')
@@ -324,7 +324,7 @@ class TestFit:
     ):
         """On fitting failure, a RuntimeWarning must be emitted."""
         from sklearn.pipeline import Pipeline
-        from src.mad_scaler import MADScaler
+        from mad_scaler import MADScaler
 
         X, y_surv, groups, _ = synthetic_survival_data
         model = CoxFrailty(distribution='gamma')

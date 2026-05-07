@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from sklearn.pipeline import Pipeline
-from src.mad_scaler import MADScaler
+from mad_scaler import MADScaler
 
 """MADScaler uses median + MAD scaling, equivalent to R's mad() function.
 This is required for frailtyPenal convergence (CoxFrailty model). If you
