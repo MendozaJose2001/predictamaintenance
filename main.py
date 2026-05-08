@@ -32,26 +32,26 @@ from src.models.svr_model import SVRModel
 # Param grids — one per model
 # ---------------------------------------------------------------------------
 
-_PARAM_GRID_NB: dict = {
+_PARAM_GRID_NB = {
     'feature_set':        ['A', 'B', 'C', 'D'],
     'window_size':        [15, 20, 25, 30],
     'n_components':       [10, 15, 20],
     'clipping_threshold': [115, 120, 125, 130],
-    'link_type':          ['log', 'identity', 'sqrt'],
+    'link_type':          ['log'],          # ← solo canónico
     'alpha':              [0.1, 0.5, 1.0, 1.5],
-    'alpha_reg':          [0.0, 0.05, 0.1, 0.5],
-    'l1_ratio':           [0.0, 0.5, 0.75, 1.0],
+    'alpha_reg':          [0.0, 0.1, 0.5],  # ← quitas 0.05
+    'l1_ratio':           [0.0, 0.5, 1.0],  # ← quitas 0.75
 }
 
-_PARAM_GRID_SVR: dict = {
+_PARAM_GRID_SVR = {
     'feature_set':        ['A', 'B', 'C', 'D'],
     'window_size':        [15, 20, 25, 30],
     'n_components':       [10, 15, 20],
     'clipping_threshold': [115, 120, 125, 130],
     'kernel':             ['rbf', 'linear', 'poly'],
-    'C':                  [0.1, 1.0, 10.0, 100.0],
-    'epsilon':            [0.01, 0.1, 0.5, 1.0],
-    'gamma':              ['scale', 'auto', 0.01, 0.1],
+    'C':                  [0.1, 1.0, 10.0],        # ← quitas 100.0
+    'epsilon':            [0.01, 0.1],             # ← quitas 1.0
+    'gamma':              ['scale', 0.01],       # ← o ['scale', 'auto']
     'degree':             [2, 3],
 }
 

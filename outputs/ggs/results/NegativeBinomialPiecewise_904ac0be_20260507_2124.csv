@@ -1,3 +1,0 @@
-feature_set,window_size,n_components,clipping_threshold,link_type,alpha,alpha_reg,l1_ratio,mean_S_score,mean_C_index,mean_MAE,mean_RMSE
-A,15,10,115,log,0.1,0.0,0.0,4.709905897711366,0.8732559159786615,13.608205250300172,17.36515869170948
-B,15,10,115,log,0.1,0.0,0.0,4.5350657815431,0.8769134771171525,13.362159243220322,17.0716418051471
