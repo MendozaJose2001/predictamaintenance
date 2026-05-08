@@ -11,8 +11,10 @@ The pipeline encapsulates three sequential transformation stages:
         feature tensors and counting process survival targets.
 
     Nodo 3 — extract_window_features:
-        Numpy-native feature extraction (statistical + trend).
-        Transforms 3D tensors to 2D feature matrices per motor.
+        Numpy-native feature extraction over sliding windows.
+        The feature set is controlled by the feature_set hyperparameter,
+        enabling systematic evaluation of different feature combinations
+        as part of the GGS.
 
     Nodo 4 — DimReducer:
         Internal RobustScaler (on extracted features) followed by PCA.
@@ -24,10 +26,27 @@ Design decision — Nodo 1 (FeatureScaler) removed:
     the extracted features before PCA. Without Nodo 1:
     - No NaN or Inf in PCA output
     - Better variance distribution across PCA components (PC1=0.51 vs 0.70)
-    - Higher cumulative explained variance (0.91 vs 0.95 is comparable)
     - Simpler pipeline with one fewer stateful transformer
-    The DimReducer's internal RobustScaler handles all scaling needs before
-    the PCA decomposition.
+    The DimReducer's internal RobustScaler handles all scaling needs.
+
+Feature set selection:
+    feature_set is a GGS hyperparameter that controls which combination
+    of statistical features is extracted in Nodo 3. Valid values are the
+    keys of FEATURE_SETS in feature_extraction.py: 'A', 'B', 'C', 'D', 'E'.
+
+    The feature sets were evaluated via the ratio-adjusted metric
+    (autovalor promedio = cumvar × p / n_components) over 4 window sizes
+    and 140 training motors. Results (ws=30):
+
+        SET_A (p=80):  ratio=4.45 — baseline minimal
+        SET_B (p=128): ratio=6.51 — pipeline reference
+        SET_C (p=160): ratio=7.14 — +memory features
+        SET_D (p=176): ratio=7.80 — +frequency features (preliminary winner)
+        SET_E (p=144): ratio=6.44 — DISCARDED (ratio≈B, cost 25× higher)
+
+    The definitive selection is performed by the GGS using MAE/RMSE/S-Score
+    as criterion — the model decides which feature set produces better RUL
+    predictions.
 
 Usage pattern in GGS loop:
     # Training fold
@@ -54,7 +73,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from src.pipeline.feature_extraction import ALL_FEATURES, extract_window_features
+from src.pipeline.feature_extraction import FEATURE_SETS, extract_window_features
 from src.pipeline.windowing import MotorWindows, build_windows, flatten_windows
 from src.pipeline.dim_reduction import DimReducer
 
@@ -67,6 +86,9 @@ PipelineOutput = tuple[
     np.ndarray,  # evento     (n_windows,)
     np.ndarray,  # groups     (n_windows,) motor_id per window
 ]
+
+# Valid feature set keys
+_VALID_FEATURE_SETS: frozenset[str] = frozenset(FEATURE_SETS.keys())
 
 
 class RULPipeline:
@@ -85,15 +107,22 @@ class RULPipeline:
         window_size: Number of consecutive cycles per sliding window.
             GGS hyperparameter. Defaults to 30.
         clipping_threshold: Maximum RUL value for y_rul clipping.
-            GGS hyperparameter. Defaults to 125.
+            Does not affect X features — only y_rul target construction.
+            Defaults to 125.
         n_components: Number of PCA components to retain.
             GGS hyperparameter. Defaults to 10.
+        feature_set: Key of the feature set to use in Nodo 3.
+            GGS hyperparameter. Must be one of: 'A', 'B', 'C', 'D', 'E'.
+            Defaults to 'B' (pipeline reference set).
+            SET_E is available but computationally prohibitive for GGS.
         verbose: If True, prints timing for each pipeline stage.
             Defaults to False.
 
     Attributes:
         reducer_: Fitted DimReducer. Available after fit_transform().
         is_fitted_: True after fit_transform() completes successfully.
+        features_: List of feature names used in Nodo 3. Available after
+            __init__ — does not require fit_transform().
     """
 
     def __init__(
@@ -101,13 +130,21 @@ class RULPipeline:
         window_size: int = 30,
         clipping_threshold: int = 125,
         n_components: int = 10,
+        feature_set: str = 'B',
         verbose: bool = False,
     ) -> None:
+        if feature_set not in _VALID_FEATURE_SETS:
+            raise ValueError(
+                f"Invalid feature_set '{feature_set}'. "
+                f"Must be one of: {sorted(_VALID_FEATURE_SETS)}"
+            )
         self.window_size = window_size
         self.clipping_threshold = clipping_threshold
         self.n_components = n_components
+        self.feature_set = feature_set
         self.verbose = verbose
         self.is_fitted_: bool = False
+        self.features_: list[str] = FEATURE_SETS[feature_set]
 
     def _log(self, message: str, elapsed: float) -> None:
         """Prints a timing message when verbose=True."""
@@ -135,9 +172,12 @@ class RULPipeline:
         t0 = time.perf_counter()
         motor_features = extract_window_features(
             motor_windows=motor_windows,
-            features=ALL_FEATURES,
+            features=self.features_,
         )
-        self._log("Nodo 3 (features)", time.perf_counter() - t0)
+        self._log(
+            f"Nodo 3 (features={self.feature_set}, p={len(self.features_)*16})",
+            time.perf_counter() - t0,
+        )
 
         return motor_features
 

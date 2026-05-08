@@ -1,0 +1,31 @@
+# PredictaMaintenance — dependencias del proyecto
+# Generado manualmente filtrando imports directos del código fuente
+# Versiones mínimas validadas en el entorno de desarrollo
+
+# ── Core científico ──────────────────────────────────────────
+numpy>=2.0.0
+pandas>=2.0.0
+scipy>=1.10.0
+
+# ── Machine Learning ─────────────────────────────────────────
+scikit-learn>=1.3.0
+scikit-survival>=0.22.0
+
+# ── Modelos estadísticos ─────────────────────────────────────
+statsmodels>=0.14.0
+autograd>=1.6.0
+autograd-gamma>=0.5.0
+patsy>=0.5.0          # requerida por statsmodels
+
+# ── Análisis de supervivencia ─────────────────────────────────
+lifelines>=0.27.0
+
+# ── Visualización ────────────────────────────────────────────
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# ── Utilidades ───────────────────────────────────────────────
+tqdm>=4.65.0
+
+# ── Testing ──────────────────────────────────────────────────
+pytest>=7.0.0

@@ -1,7 +1,7 @@
 # Metodología de Selección de Características — PredictaMaintenance
-## Evaluación Bootstrap Pareada de Conjuntos de Características
+## Evaluación Preliminar y Group Grid Search como Criterio Definitivo
 
-**Versión:** 2.0  
+**Versión:** 3.0  
 **Estado:** Pendiente de revisión del asesor  
 **Equipo:** PredictaMaintenance
 
@@ -24,11 +24,9 @@ C-MAPSS FD001 contiene datos de degradación hasta fallo de motores turbofan de 
 | Ciclos por motor | 128–362 |
 | Indicador de evento | evento=1 únicamente en el último ciclo de cada motor de entrenamiento |
 
-El dataset fue diseñado para regresión de RUL, no para análisis de supervivencia. Cada motor tiene exactamente un evento terminal al final de su vida operativa.
+El dataset fue diseñado para regresión de RUL. Cada motor tiene exactamente un evento terminal al final de su vida operativa.
 
 ### 1.2 Arquitectura del Pipeline
-
-El pipeline de PredictaMaintenance transforma series temporales de sensores crudos en matrices de características mediante cuatro etapas secuenciales:
 
 ```
 Sensores crudos (unit_number, time_in_cycles, sensores, evento)
@@ -36,69 +34,77 @@ Sensores crudos (unit_number, time_in_cycles, sensores, evento)
 Nodo 2 — build_windows(window_size)
     Ventanas deslizantes de window_size ciclos por motor
     Salida: (n_ventanas, window_size, n_sensores) por motor
-
     ↓
-Nodo 3 — extract_window_features
-    Características estadísticas y de tendencia sobre el eje de ventana
+Nodo 3 — extract_window_features(feature_set)
+    Características estadísticas sobre el eje de ventana
     Salida: (n_ventanas, n_características) por motor
-
     ↓
 Nodo 4 — DimReducer(n_components)
     RobustScaler interno + PCA Global
     Ajustado únicamente sobre datos de entrenamiento (sin data leakage)
     Salida: (n_ventanas, n_components) por motor
-
     ↓
 Modelo (NB, SVR, etc.)
     Recibe matriz plana (total_ventanas, n_components)
     El modelo es agnóstico al motor
 ```
 
-**Decisiones de diseño ya validadas:**
-- El Nodo 1 (FeatureScaler sobre sensores crudos) fue eliminado — redundante dado el RobustScaler interno del DimReducer
-- El PCA se ajusta globalmente sobre todos los motores de entrenamiento concatenados — no por motor individual
-- El clipping_threshold afecta únicamente la construcción del target y_rul, no las características X
+**Decisiones de diseño validadas:**
+- Nodo 1 (FeatureScaler sobre sensores crudos) eliminado — redundante dado el RobustScaler del DimReducer
+- PCA ajustado globalmente sobre todos los motores de entrenamiento concatenados — no por motor
+- clipping_threshold afecta únicamente y_rul, no las características X
 
-### 1.3 Conjunto de Características Actual
+### 1.3 Características Disponibles
 
-Se extraen características sobre cada ventana de window_size ciclos para cada uno de los 16 sensores:
+Las características candidatas se organizan en cinco dominios:
 
-**Estadísticos descriptivos:**
-- `median`, `abs_energy`, `q25`, `q75`
-
-**Tendencia y correlación:**
-- `slope` (pendiente OLS), `rvalue` (Pearson r con el tiempo)
-- `autocorr_lag_1/2/3`, `partial_autocorr_lag_1/2/3`
-
-Total: 8 tipos × 16 sensores = **128 características** por ventana.
+| Dominio | Características | Costo |
+|---------|----------------|-------|
+| Estadístico | mean, std, rms, median, q25, q75 | O(n) |
+| Tendencia | slope, rvalue | O(n) |
+| Autocorrelación | autocorr_lag_1/2 | O(n) |
+| Memoria | runs_ratio, hurst_rs | O(n) |
+| Frecuencia | fft_coef_1/2/3 | O(n log n) |
+| Complejidad | permutation_entropy | O(n) — lento en práctica |
 
 ---
 
 ## 2. Pregunta de Investigación
 
-> **¿Qué combinación de características estadísticas extraídas sobre ventanas deslizantes retiene la mayor cantidad de información sobre la degradación del motor, medida mediante la varianza explicada acumulada de un PCA global ajustado sobre la flota de entrenamiento?**
+> **¿Qué combinación de características estadísticas extraídas sobre ventanas deslizantes permite al modelo predictor estimar mejor el RUL de motores no vistos durante el entrenamiento?**
 
-### 2.1 Por qué la varianza explicada del PCA como criterio
+### 2.1 Evolución del criterio de selección
 
-El modelo predictor (NB, SVR) es agnóstico al motor — recibe una matriz plana de componentes PCA y aprende el mapeo hacia el RUL. La calidad de este mapeo depende críticamente de cuánta información de degradación sobrevive la cadena extracción de características → compresión PCA.
+La selección del criterio de evaluación pasó por tres etapas durante el desarrollo del proyecto:
 
-La varianza explicada acumulada del PCA (cumvar) mide exactamente esto: **qué proporción de la información original de las características se retiene en los primeros n_components componentes principales**. Un conjunto de características que alcanza mayor cumvar bajo los mismos n_components proporciona al modelo una representación más rica e informativa de la degradación del motor.
+**Etapa 1 — cumvar del PCA (descartado):**
+Se propuso inicialmente usar la varianza explicada acumulada del PCA con n_components fijo como criterio. Esta métrica fue descartada porque es matemáticamente inválida para comparar conjuntos de diferente dimensionalidad: con datos estandarizados, la varianza total es igual a p (número de features), por lo que cumvar con n_components fijo penaliza sistemáticamente los conjuntos más grandes.
 
-Este criterio:
-- No requiere entrenar ningún modelo predictor → sin circularidad ✅
-- Es independiente del predictor específico utilizado → generalizable ✅
-- Mide directamente la retención de información → interpretable ✅
-- Está establecido en la literatura de PHM (Alomari et al. 2023) ✅
+**Etapa 2 — Autovalor promedio como exploración preliminar:**
+Para corregir el sesgo de dimensionalidad se propuso el autovalor promedio:
 
-### 2.2 Por qué NO usar rendimiento predictivo (R², MAE) como criterio
+```
+ratio = cumvar × (p / n_components) = (1/k) Σ λ_i
+```
 
-Usar el rendimiento del modelo (regresión Ridge sobre PCs → R²) introduciría el supuesto de que el RUL y los componentes PCA están linealmente relacionados. Dado que los predictores reales (NB, SVR) son no lineales, este proxy podría ordenar sistemáticamente mal los conjuntos de características. Delegamos la responsabilidad de encontrar la relación características-RUL a los modelos — nuestra tarea es proporcionarles características maximalmente informativas.
+Esta métrica es comparable entre conjuntos de diferente dimensionalidad porque expresa la varianza absoluta promedio capturada por cada PC, independientemente de p. Se usa como **acercamiento preliminar** para orientar la búsqueda y descartar conjuntos claramente dominados.
+
+**Etapa 3 — Rendimiento predictivo real como criterio definitivo:**
+El criterio final es el rendimiento del modelo predictor (MAE, RMSE, S-Score) en validación cruzada GroupKFold. El asesor señaló correctamente que "el modelo debería ser quien decida" — la selección de features no puede desacoplarse del modelo que las consume. Este enfoque es el más defendible en un paper de investigación porque mide directamente el objetivo del pipeline.
+
+### 2.2 Por qué el rendimiento predictivo como criterio definitivo
+
+- Mide directamente la precisión en RUL — el objetivo real del pipeline ✅
+- No asume linealidad entre features y RUL ✅
+- Validado mediante GroupKFold por motor — sin data leakage ✅
+- Estándar en competiciones PHM y revistas de fiabilidad ✅
+- Permite que cada conjunto encuentre su n_components óptimo ✅
 
 ---
 
 ## 3. Conjuntos Candidatos de Características
 
-Se evalúan cinco conjuntos diseñados sistemáticamente para explorar diferentes dominios de información. El Conjunto B es la referencia del pipeline actual; los conjuntos C, D y E añaden un dominio adicional de forma independiente para medir su aporte incremental. El Conjunto A es el baseline mínimo para anclar la comparación.
+Se evalúan cuatro conjuntos en el GGS definitivo, seleccionados mediante el análisis preliminar de autovalor promedio. Un quinto conjunto (E) fue descartado por viabilidad computacional.
 
 ### 3.1 Definición de los Conjuntos
 
@@ -108,16 +114,9 @@ Se evalúan cinco conjuntos diseñados sistemáticamente para explorar diferente
 
 *Composición:* `mean`, `std`, `rms`, `slope`, `rvalue`
 *Dimensión:* 5 tipos × 16 sensores = **80 características**
+*Rol:* Ancla inferior — permite cuantificar la mejora de conjuntos más ricos
 
-*Dominio de información:* Distribución básica + tendencia lineal
-
-*Justificación:* Representa el conjunto mínimo coherente para capturar el nivel, la dispersión y la tendencia temporal de cada sensor. Sirve como ancla inferior de la comparación — si los conjuntos más complejos no superan significativamente este baseline, justifica una implementación minimal.
-
-*Características excluidas y razón:*
-- `median`, `q25`, `q75`: redundantes con `mean` y `std` en este contexto minimal
-- `abs_energy`: redundante con `rms` (abs_energy = rms² × window_size con window_size constante)
-- Autocorrelaciones: se evalúan en conjunto separado
-- FFT y entropía: se evalúan en conjuntos separados
+*Justificación:* Representa el conjunto mínimo coherente para capturar el nivel, la dispersión y la tendencia temporal de cada sensor. Si C o D no superan significativamente a A en rendimiento predictivo, se justifica una implementación minimal.
 
 ---
 
@@ -125,258 +124,220 @@ Se evalúan cinco conjuntos diseñados sistemáticamente para explorar diferente
 
 *Composición:* `median`, `rms`, `q25`, `q75`, `slope`, `rvalue`, `autocorr_lag_1`, `autocorr_lag_2`
 *Dimensión:* 8 tipos × 16 sensores = **128 características**
+*Rol:* Referencia — mide la mejora respecto al estado anterior del pipeline
 
-*Dominio de información:* Distribución robusta + tendencia + memoria de corto plazo
+*Justificación:* Refleja el conjunto actual de PredictaMaintenance. Usa `median` y cuantiles por su robustez ante valores atípicos en ciclos tardíos. Incluye los dos primeros lags de autocorrelación para capturar persistencia de corto plazo.
 
-*Justificación:* Refleja el conjunto actual del pipeline de PredictaMaintenance. Usa `median` y cuantiles en lugar de `mean` y `std` por su robustez ante valores atípicos generados por la degradación en ciclos tardíos. Incluye los dos primeros lags de autocorrelación para capturar persistencia de corto plazo.
-
-*Nota sobre abs_energy vs rms:* El análisis empírico sobre motor 1 confirmó que `abs_energy` produce rangos de hasta 2.47×10⁹ mientras que `rms` produce rangos de hasta 9,055 — misma varianza explicada en PCA pero con estabilidad numérica superior. El Conjunto B ya usa `rms`.
-
-*Características excluidas y razón:*
-- `mean`, `std`: reemplazados por versiones más robustas (`median`, `q25/q75`)
-- `autocorr_lag_3` y `partial_autocorr`: se evalúan en Conjunto C
-- FFT, entropía, características de memoria: se evalúan en conjuntos separados
+*Nota:* `abs_energy` fue reemplazado por `rms` — misma información pero sin explosión numérica (rms ~ 9,000 vs abs_energy ~ 2.4×10⁹).
 
 ---
 
-**Conjunto C — +Memoria temporal alternativa**
+**Conjunto C — +Memoria temporal**
 
 *Composición:* B + `runs_ratio`, `hurst_rs`
 *Dimensión:* 10 tipos × 16 sensores = **160 características**
-
-*Dominio de información:* B + persistencia direccional + memoria larga
+*Rol:* Candidato — evalúa si la memoria temporal mejora la predicción
 
 *Justificación de las características añadidas:*
 
-**runs_ratio** — Estadístico de rachas de signos de la primera diferencia:
+**runs_ratio** — proporción de rachas de signos en las primeras diferencias:
 ```
 d_t = sign(x_t - x_{t-1})
-runs_ratio = número_de_rachas(d_t) / (window_size - 1)
+runs_ratio = n_rachas(d_t) / (window_size - 1)
 ```
-Mide la persistencia direccional de la señal. Alta autocorrelación positiva produce rachas largas (runs_ratio bajo); señales caóticas o ruidosas producen alternancia frecuente (runs_ratio alto). Captura patrones no lineales que la ACF lineal no detecta. Costo: O(n) — ~40 operaciones por sensor por ventana.
+Mide persistencia direccional no lineal — bajo si la señal sigue una dirección, alto si alterna caóticamente. Costo: O(n).
 
-**hurst_rs** — Exponente de Hurst por rango reescalado simplificado:
+**hurst_rs** — exponente de Hurst por rango reescalado:
 ```
-R/S = (max(cumsum(x - mean(x))) - min(cumsum(x - mean(x)))) / std(x)
+R/S = (max(cumsum(x - mean)) - min(cumsum(x - mean))) / std(x)
 hurst_rs = log(R/S) / log(n)
 ```
-Mide la memoria larga de la señal. H > 0.5 indica persistencia (tendencias que se mantienen); H < 0.5 indica antipersistencia. Complementa autocorr_lag_1/2 que solo captura dependencia de primer y segundo orden. Costo: O(n) — ~60 operaciones por sensor por ventana.
+H > 0.5 indica persistencia; H < 0.5 antipersistencia. Captura memoria larga no cubierta por autocorr_lag_1/2. Costo: O(n).
 
-*Por qué no partial_autocorr:* Yule-Walker requiere resolver un sistema lineal de dimensión lag × lag por cada par (ventana, sensor) — O(n²) efectivo. Con 15,814 ventanas × 16 sensores × 3 lags, el costo es prohibitivo para el análisis bootstrap (200 iteraciones × 140 motores). Las alternativas propuestas capturan memoria temporal de forma diferente y con costo O(n).
+*Por qué no partial_autocorr:* Yule-Walker es O(n²) por ventana por sensor — prohibitivo para el GGS.
 
 ---
 
-**Conjunto D — +Dominio frecuencial**
+**Conjunto D — +Frecuencia**
 
 *Composición:* B + `fft_coef_1`, `fft_coef_2`, `fft_coef_3`
 *Dimensión:* 11 tipos × 16 sensores = **176 características**
+*Rol:* Candidato favorito según análisis preliminar
 
-*Dominio de información:* B + componentes frecuenciales
+*Justificación:* Los coeficientes FFT capturan la amplitud de las frecuencias dominantes dentro de la ventana. Alomari et al. (2023) identifican que PC1 está fuertemente influenciado por coeficientes FFT de sensores de temperatura y presión.
 
-*Justificación de las características añadidas:*
-
-**fft_coef_1/2/3** — Valor absoluto de los coeficientes de la FFT para frecuencias 1, 2 y 3 ciclos/ventana:
-```
-fft_coef_k = |FFT(x)[k]|   para k = 1, 2, 3
-```
-Captura la amplitud de las frecuencias dominantes dentro de la ventana. Alomari et al. (2023) identifican que el PC1 está fuertemente influenciado por coeficientes FFT de sensores de temperatura y presión. La degradación puede manifestarse como cambios en la distribución espectral de la señal.
-
-*Nota:* fft_coef_0 fue excluido deliberadamente porque es proporcional a la media de la ventana — redundante con `median` ya presente en B.
-
-*Por qué frecuencias 1, 2, 3 y no superiores:* Con window_size=20, las frecuencias superiores a 3-4 ciclos/ventana suelen estar dominadas por ruido de los sensores. Los coeficientes de baja frecuencia capturan variaciones suaves asociadas a la degradación gradual.
+*Nota:* fft_coef_0 excluido — proporcional a mean(x), redundante con median ya presente en B. Frecuencias > 3 excluidas para window_size=20 — dominadas por ruido.
 
 ---
 
-**Conjunto E — +Complejidad**
+**Conjunto E — DESCARTADO**
 
-*Composición:* B + `permutation_entropy`
-*Dimensión:* 9 tipos × 16 sensores = **144 características**
+*Composición original:* B + `permutation_entropy`
+*Razón de descarte:* Costo computacional de 284s para 140 motores (25× más lento que D). El autovalor promedio de E (6.22) es prácticamente idéntico al de B (6.25), lo que indica que la permutation_entropy no aporta información adicional relevante a pesar de su alto costo. Incluirlo en el GGS añadiría ~70 minutos solo en extracción de features sin beneficio esperado.
 
-*Dominio de información:* B + desorden/impredictibilidad de la señal
+*Documentación:* El descarte se aplica antes del GGS basándose en el filtro de viabilidad computacional — sin sesgo de selección porque no se observaron métricas predictivas.
 
-*Justificación de las características añadidas:*
+---
 
-**permutation_entropy** — Entropía de permutación con tau=1, dimensión=3:
+### 3.2 Resumen de Conjuntos para el GGS
+
+| Conjunto | Características | p | Ratio preliminar | Tiempo (4 ws) | Rol |
+|----------|----------------|---|------------------|---------------|-----|
+| A | mean, std, rms, slope, rvalue | 80 | 4.19 | 1.8s | Baseline |
+| B | median, rms, q25, q75, slope, rvalue, autocorr×2 | 128 | 6.25 | 8.4s | Referencia |
+| C | B + runs_ratio, hurst_rs | 160 | 6.74 | 11.3s | Candidato |
+| **D** | **B + fft_coef_1/2/3** | **176** | **7.16** | **10.5s** | **Favorito** |
+| ~~E~~ | ~~B + permutation_entropy~~ | ~~144~~ | ~~6.22~~ | ~~284.3s~~ | ~~Descartado~~ |
+
+---
+
+## 4. Análisis Preliminar — Autovalor Promedio
+
+### 4.1 Métrica
+
+El autovalor promedio corrige el sesgo de dimensionalidad del cumvar simple:
+
 ```
-PE = -sum(p(π) * log2(p(π)))   para todos los patrones ordinales π de dimensión 3
+ratio = cumvar × (p / n_components) = (1/k) Σ λ_i
+
+Donde:
+    cumvar      = varianza explicada acumulada por los k primeros PCs
+    p           = número de características del conjunto
+    n_components = k = 15 (fijo para el análisis preliminar)
+    λ_i         = i-ésimo autovalor de la matriz de covarianza (datos estandarizados)
 ```
-Mide la complejidad o impredictibilidad de la serie temporal. Alomari et al. (2023) identifican que el PC2 está dominado casi exclusivamente por la entropía de permutación de sensores de velocidad y presión (Nf, Nc, phi, NRc, BPR). En motores sanos, la señal puede ser más regular; la degradación puede inducir mayor desorden o, paradójicamente, pérdida de complejidad por saturación.
 
-*Costo computacional:* O(n) — construcción de patrones ordinales sobre ventana de 20 ciclos. Moderado pero justificado por la información cualitativa única que aporta.
+**Interpretación:** expresa cuánta varianza, en unidades de la varianza de una característica original, retiene cada PC en promedio. Ratio > 1 indica que los PCs capturan más varianza que una característica aleatoria — ratio = 1 equivaldría a ruido blanco.
 
----
+**Validez:** comparable entre conjuntos de diferente p porque la varianza total de datos estandarizados es exactamente p, y la división por p en el ratio la cancela.
 
-### 3.2 Resumen de Conjuntos
+**Limitación:** mide varianza, no relevancia predictiva. Dos conjuntos con igual ratio pueden tener diferente utilidad para predecir RUL si la varianza capturada está correlacionada con el target en diferente medida.
 
-| Conjunto | Características | n_tipos | n_features | Dominio añadido |
-|----------|----------------|---------|------------|-----------------|
-| A | mean, std, rms, slope, rvalue | 5 | 80 | Baseline mínimo |
-| B | median, rms, q25, q75, slope, rvalue, autocorr×2 | 8 | 128 | Referencia actual |
-| C | B + runs_ratio, hurst_rs | 10 | 160 | +Memoria alternativa |
-| D | B + fft_coef_1/2/3 | 11 | 176 | +Frecuencia |
-| E | B + permutation_entropy | 9 | 144 | +Complejidad |
-
----
-
-## 4. Metodología: Enfoque Híbrido en Dos Fases
-
-La selección del mejor conjunto de características se realiza mediante un procedimiento en dos fases. La Fase 1 es exploratoria y computacionalmente ligera; la Fase 2 (bootstrap + prueba de hipótesis) se aplica únicamente si la Fase 1 no produce un ganador claro. Este diseño es metodológicamente honesto y eficiente: evita la complejidad innecesaria cuando los datos hablan por sí solos, pero garantiza rigor estadístico cuando las diferencias son marginales.
-
----
-
-### 4.1 Fase 1 — Evaluación Directa con Múltiples Tamaños de Ventana
-
-**Objetivo:** Determinar si existe un conjunto dominante cuyo ranking sea estable e inequívoco a través de diferentes configuraciones de ventana.
-
-**Procedimiento:**
+### 4.2 Procedimiento
 
 ```
 Para cada window_size ∈ {15, 20, 25, 30}:
-
     Para cada conjunto (A, B, C, D, E):
-
-        1. Cargar los 140 motores de entrenamiento completos
-        2. Construir ventanas:
-           motor_windows = build_windows(df_140_motores, window_size)
-        3. Extraer características del conjunto X:
-           motor_features = extract_window_features(motor_windows, features=CONJUNTO_X)
-        4. Concatenar todas las ventanas globalmente:
-           X_global = concatenar([motor_features[m]['X_windows'] para m en motores])
-        5. Ajustar RobustScaler + PCA(n_components=15):
-           scaler = RobustScaler().fit(X_global)
-           X_scaled = scaler.transform(X_global)
-           pca = PCA(n_components=15).fit(X_scaled)
-        6. Registrar:
-           cumvar[CONJUNTO_X][window_size] = pca.explained_variance_ratio_.cumsum()[-1]
-
-Resultado: Matriz 5 × 4 de valores de cumvar
-    filas:    conjuntos A, B, C, D, E
-    columnas: window_size 15, 20, 25, 30
+        1. Cargar los 140 motores de entrenamiento
+        2. build_windows(window_size)
+        3. extract_window_features(conjunto)
+        4. Concatenar globalmente: X_global (n_ventanas_total, p)
+        5. RobustScaler + PCA(n_components=15)
+        6. ratio = cumvar × p / 15
 ```
 
-**Criterio de decisión de Fase 1:**
+### 4.3 Resultados
 
-Se procede directamente a la selección (sin Fase 2) si se cumplen **ambas** condiciones:
+**Tabla de ratio ajustado por conjunto y window_size:**
 
-1. **Dominancia clara:** El conjunto ganador supera al segundo mejor por un margen ≥ 2% de cumvar en al menos 3 de los 4 tamaños de ventana evaluados.
+| Conjunto | ws=15 | ws=20 | ws=25 | ws=30 | Media | Std |
+|----------|-------|-------|-------|-------|-------|-----|
+| A | 3.917 | 4.102 | 4.284 | 4.449 | 4.188 | 0.199 |
+| B | 5.995 | 6.151 | 6.331 | 6.514 | 6.248 | 0.194 |
+| C | 6.330 | 6.568 | 6.911 | 7.144 | 6.738 | 0.313 |
+| **D** | **6.534** | **6.945** | **7.382** | **7.797** | **7.165** | **0.472** |
+| E | 6.174 | 6.069 | 6.205 | 6.439 | 6.222 | 0.135 |
 
-2. **Ranking estable:** El conjunto ganador ocupa la primera posición en los 4 tamaños de ventana evaluados (ranking invariante al window_size).
+**Ranking por window_size:**
 
-Si no se cumplen ambas condiciones, se pasa a la Fase 2.
+| window_size | Ranking |
+|-------------|---------|
+| ws=15 | D > C > E > B > A |
+| ws=20 | D > C > B > E > A |
+| ws=25 | D > C > B > E > A |
+| ws=30 | D > C > B > E > A |
 
-**Reporte de Fase 1:**
-- Tabla 5 × 4 de valores de cumvar (conjuntos × window_sizes)
-- Gráfico de líneas: cumvar vs window_size por conjunto
-- Identificación de conjuntos finalistas (aquellos con diferencias < 2% respecto al mejor)
+**Top-2 estable:** D > C en todos los window_sizes ✅
+
+**Observaciones:**
+- D es el candidato favorito con ratio medio 7.165 — consistentemente superior
+- A es el más débil (ratio 4.188) — confirma que el baseline mínimo no es suficiente bajo la métrica correcta
+- E tiene ratio casi idéntico a B (6.22 vs 6.25) con costo 25× mayor → descarte justificado
+- El ratio crece monotónicamente con window_size en todos los conjuntos — ventanas más largas retienen más información
+
+### 4.4 Limitación del análisis preliminar
+
+La comparación por ratio ajustado no garantiza que D sea el mejor conjunto para predecir RUL — solo que concentra más varianza absoluta en los primeros 15 PCs. La selección definitiva requiere evaluar el rendimiento predictivo real mediante el GGS.
 
 ---
 
-### 4.2 Fase 2 — Bootstrap Pareado (condicional)
+## 5. Selección Definitiva — Group Grid Search
 
-**Se aplica únicamente si:** el ranking de Fase 1 es inestable O las diferencias entre los mejores conjuntos son < 2%.
+### 5.1 Justificación del enfoque
 
-**Objetivo:** Cuantificar la incertidumbre muestral y confirmar que la diferencia observada entre conjuntos finalistas no es producto del azar.
+El feature_set se incorpora como hiperparámetro del GGS junto con window_size y n_components. Este enfoque:
 
-**Justificación del bootstrap pareado sobre K-Fold:**
+- Mide directamente la precisión en RUL bajo condiciones reales del pipeline ✅
+- Permite que cada conjunto encuentre su n_components óptimo — comparación justa ✅
+- GroupKFold por motor garantiza ausencia de data leakage ✅
+- Es el estándar en la literatura de PHM para selección de características ✅
 
-| Criterio | K-Fold repetido (K=5, R=10) | Bootstrap Pareado (N=200) |
-|----------|-----------------------------|---------------------------|
-| Observaciones | 50 | 200 |
-| Repetición de motores | No | Sí (intra-muestra) |
-| Diseño pareado | Parcial | Total — misma muestra para todos los conjuntos |
-| Poder estadístico | Moderado | Alto |
+### 5.2 Espacio de búsqueda
 
-El diseño **completamente pareado** del bootstrap es la ventaja decisiva: al evaluar todos los conjuntos sobre la misma muestra en cada iteración, se elimina la variabilidad de composición como factor de confusión. La correlación intra-muestra por repetición de motores no afecta la validez porque la dependencia es entre observaciones de la misma iteración — no entre iteraciones independientes.
+```python
+param_grid = {
+    # Hiperparámetros del pipeline
+    'feature_set':  ['A', 'B', 'C', 'D'],
+    'window_size':  [15, 20, 25, 30],
+    'n_components': [10, 15, 20],
 
-**Procedimiento:**
-
-```
-Hiperparámetros: window_size del mejor resultado en Fase 1, n_components=15
-
-Para iteración i = 1 hasta 200:
-
-    Paso 1 — Muestra bootstrap:
-        Remuestrear 140 motores CON reemplazo (remuestreo a nivel de motor)
-
-    Paso 2 — Para CADA conjunto finalista sobre la MISMA muestra_i:
-        a. build_windows → extract_features → concatenar → RobustScaler + PCA
-        b. Registrar cumvar[CONJUNTO_X][i]
-
-Resultado: vectores de 200 valores pareados por conjunto finalista
+    # Hiperparámetros del modelo (por separado para NB y SVR)
+    # NB:  alpha, alpha_reg, l1_ratio, link_type
+    # SVR: C, epsilon, kernel, gamma
+}
 ```
 
-**Comparación estadística:**
+**Combinaciones de pipeline:** 4 sets × 4 window_sizes × 3 n_components = **48 combinaciones**
+**Con 5 folds GroupKFold:** 48 × 5 = **240 fits por modelo**
 
-- **Estadísticos descriptivos:** media ± desviación estándar, IC 95% (percentiles 2.5 y 97.5)
-- **Prueba:** Wilcoxon signed-rank test pareado entre cada par de conjuntos finalistas
-- **Corrección múltiple:** Bonferroni (α' = 0.05 / número de pares)
-- **Criterio de selección:** conjunto con mayor cumvar medio Y diferencia estadísticamente significativa (p < α') respecto al Conjunto B (referencia)
+### 5.3 Métricas de evaluación
+
+- **MAE** — error absoluto medio en ciclos (interpretable físicamente)
+- **RMSE** — penaliza errores grandes
+- **S-Score** — función asimétrica NASA: penaliza más las sobreestimaciones de RUL
+
+### 5.4 Criterio de selección final
+
+Se selecciona la combinación (feature_set, window_size, n_components, hiperparámetros_modelo) que minimiza el MAE medio en validación cruzada. En caso de empate dentro del margen de std, se prefiere el conjunto con menor dimensionalidad por parsimonia.
+
+### 5.5 Control de sesgo de selección
+
+- El GGS se ejecuta exclusivamente sobre los 140 motores de entrenamiento
+- Los 60 motores de test se reservan para evaluación final — nunca vistos durante la selección
+- GroupKFold garantiza que las ventanas de un mismo motor no se dividen entre folds
+- El análisis preliminar de ratio ajustado (Sección 4) se aplicó antes de observar métricas predictivas — sin sesgo de selección retrospectivo
 
 ---
 
-### 4.3 Árbol de Decisión
+## 6. Resumen del Proceso Metodológico
 
 ```
-Fase 1 — Evaluación directa (4 window_sizes × 5 conjuntos)
-    ↓
-¿Ranking estable Y diferencia ≥ 2%?
-    ├── SÍ → Selección directa del conjunto ganador ✅
-    │         Reportar tabla 5×4 de cumvar
-    │         Justificar cualitativamente la elección
-    │
-    └── NO → Fase 2 — Bootstrap pareado (N=200)
-                ↓
-              Wilcoxon + Bonferroni entre finalistas
-                ↓
-              Selección del conjunto con mayor cumvar
-              estadísticamente significativo ✅
+Paso 1 — Definición de conjuntos candidatos
+    5 conjuntos (A-E) diseñados para explorar diferentes dominios:
+    distribución, tendencia, memoria, frecuencia, complejidad
+
+Paso 2 — Filtro de viabilidad computacional
+    SET E descartado: ratio similar a B (6.22 vs 6.25), costo 25× mayor
+    Quedan 4 conjuntos para el GGS: A, B, C, D
+
+Paso 3 — Análisis preliminar de autovalor promedio
+    Orientación: D > C > B > A en ratio ajustado
+    Conclusión: D es el candidato favorito, pero la selección es del GGS
+
+Paso 4 — Group Grid Search (criterio definitivo)
+    feature_set como hiperparámetro junto con window_size y n_components
+    Criterio: MAE/RMSE/S-Score en GroupKFold por motor
+    Selección: combinación con mejor rendimiento predictivo real
 ```
-
----
-
-### 4.4 Nota sobre el Criterio del 2%
-
-El umbral de 2% para "diferencia clara" se establece por las siguientes razones:
-
-- Alomari et al. (2023) reportan que 15 componentes explican ~50% de la varianza con su pipeline completo (TSFresh). Diferencias de 2% representan una variación relativa del 4% sobre ese valor — perceptible y prácticamente significativa.
-- La literatura de PHM considera que diferencias de rendimiento menores al 2% entre métodos de preprocesamiento raramente se traducen en mejoras observables en las métricas de predicción final (RMSE, S-Score).
-- Si dos conjuntos difieren en menos del 2%, la elección puede basarse en criterios secundarios: costo computacional, interpretabilidad, o simplicidad de implementación.
-
-
-
----
-
-## 5. Nota sobre el Análisis de Tamaño de Ventana
-
-El análisis de sensibilidad al tamaño de ventana {15, 20, 25, 30} está integrado en la **Fase 1** del procedimiento (Sección 4.1) — no es una extensión opcional sino parte central de la metodología.
-
-Esta decisión responde a la recomendación conjunta de la literatura consultada:
-
-> *"Si al variar el tamaño de ventana el ranking de conjuntos se mantiene idéntico, se evidencia una señal de degradación dominante robusta que no depende de la segmentación temporal."*
-
-El análisis multi-ventana cumple dos funciones simultáneamente:
-1. **Criterio de selección:** ranking estable → evidencia de dominancia real, no artefacto del window_size
-2. **Información para el GGS:** identifica qué window_size maximiza el cumvar para el conjunto ganador, informando el rango de búsqueda del hiperparámetro en el Grid Search
-
-
-
----
-
-## 6. Resultados Esperados
-
-1. **Resultado primario:** Mejor conjunto de características (A, B, C, D o E) con justificación estadística
-2. **Resultado secundario:** Sensibilidad del cumvar al tamaño de ventana (si el tiempo lo permite)
-3. **Actualización del pipeline:** Reemplazar las características actuales en `feature_extraction.py` con el conjunto seleccionado
-4. **Sección del paper:** "Metodología de Selección de Características" con resultados bootstrap y p-values Wilcoxon
 
 ---
 
 ## 7. Preguntas Abiertas para el Asesor
 
-1. ¿Es el bootstrap pareado a nivel de motor una metodología aceptable para la selección de características en PHM? ¿Hay alguna preocupación sobre la repetición de motores dentro de cada muestra?
+1. ¿Es el autovalor promedio (ratio = cumvar × p / n_components) suficiente como justificación del filtro preliminar para descartar SET E en el paper, o se requiere una validación predictiva reducida de E?
 
-2. ¿Es la varianza explicada acumulada del PCA global un proxy suficiente para "información sobre la degradación del motor", o debería complementarse con una métrica secundaria (ej. separabilidad promedio entre motores en el espacio de PCs)?
+2. ¿Debería n_components explorarse con rangos diferentes por conjunto (ej. más amplio para D que para A) dado que D tiene mayor dimensionalidad original?
 
-3. ¿Deberíamos incluir un Conjunto F que combine las mejores adiciones individuales de C, D y E (runs_ratio + hurst_rs + fft + entropía) para evaluar si la combinación de todos los dominios es superior?
+3. ¿Es el S-Score de la NASA una métrica obligatoria para este paper, o MAE y RMSE son suficientes dado el contexto académico?
 
-4. ¿Es window_size=20 el valor de referencia apropiado dado que Alomari usa max_shift=20 (no exactamente window_size=20)?
+4. ¿Se reporta el análisis de ratio ajustado como sección metodológica del paper, o solo como nota interna de desarrollo?
