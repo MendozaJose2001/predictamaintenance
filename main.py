@@ -174,7 +174,7 @@ def main() -> None:
     manager.group_grid_search(
         param_grid=param_grid,
         n_folds=args.folds,
-        silence=True,
+        silence=False,
         checkpoint_every=1,
         base_dir=Path('outputs/ggs'),
         n_jobs=args.jobs,

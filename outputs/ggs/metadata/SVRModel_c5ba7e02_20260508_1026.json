@@ -1,0 +1,54 @@
+{
+  "model": "SVRModel",
+  "param_hash": "c5ba7e02",
+  "timestamp": "20260508_1026",
+  "n_folds": 5,
+  "total_configs": 13824,
+  "param_grid": {
+    "feature_set": [
+      "A",
+      "B",
+      "C",
+      "D"
+    ],
+    "window_size": [
+      15,
+      20,
+      25,
+      30
+    ],
+    "n_components": [
+      10,
+      15,
+      20
+    ],
+    "clipping_threshold": [
+      115,
+      120,
+      125,
+      130
+    ],
+    "kernel": [
+      "rbf",
+      "linear",
+      "poly"
+    ],
+    "C": [
+      0.1,
+      1.0,
+      10.0
+    ],
+    "epsilon": [
+      0.01,
+      0.1
+    ],
+    "gamma": [
+      "scale",
+      0.01
+    ],
+    "degree": [
+      2,
+      3
+    ]
+  }
+}
