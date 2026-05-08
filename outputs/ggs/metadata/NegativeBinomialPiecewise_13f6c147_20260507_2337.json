@@ -1,0 +1,51 @@
+{
+  "model": "NegativeBinomialPiecewise",
+  "param_hash": "13f6c147",
+  "timestamp": "20260507_2337",
+  "n_folds": 5,
+  "total_configs": 6912,
+  "param_grid": {
+    "feature_set": [
+      "A",
+      "B",
+      "C",
+      "D"
+    ],
+    "window_size": [
+      15,
+      20,
+      25,
+      30
+    ],
+    "n_components": [
+      10,
+      15,
+      20
+    ],
+    "clipping_threshold": [
+      115,
+      120,
+      125,
+      130
+    ],
+    "link_type": [
+      "log"
+    ],
+    "alpha": [
+      0.1,
+      0.5,
+      1.0,
+      1.5
+    ],
+    "alpha_reg": [
+      0.0,
+      0.1,
+      0.5
+    ],
+    "l1_ratio": [
+      0.0,
+      0.5,
+      1.0
+    ]
+  }
+}
