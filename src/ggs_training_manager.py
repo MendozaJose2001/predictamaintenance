@@ -44,8 +44,7 @@ import os
 import warnings
 from itertools import product
 from pathlib import Path
-from threading import Lock
-from typing import cast
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -366,14 +365,29 @@ class GGSTrainingManager:
                     save_checkpoint(session, new_results)
 
         # ------------------------------------------------------------------
-        # Parallel mode — config-level progress + lock-protected checkpoint
+        # Parallel mode — process-based (loky), checkpoint in main process
+        #
+        # IMPORTANT: prefer='threads' is intentionally NOT used here.
+        # sklearn.svm.SVR delegates to libsvm (C extension) which releases
+        # the GIL, allowing true concurrent C-level execution across threads.
+        # libsvm is NOT thread-safe for concurrent fit() calls — shared
+        # internal state causes memory corruption and immediate crashes.
+        #
+        # backend='loky' spawns isolated worker processes (separate memory
+        # spaces), making concurrent SVR fits safe. threading.Lock and shared
+        # lists are removed from the closure since workers have their own
+        # memory. Checkpointing is handled by the main process via the
+        # return_as='generator' streaming interface (joblib >= 1.3).
         # ------------------------------------------------------------------
         else:
-            checkpoint_lock = Lock()
-            new_results_parallel: list[dict] = []
+            new_results = []
 
-            def _run_and_checkpoint(params: dict, idx: int) -> dict:
-                result = _run_single_config(
+            results_stream = Parallel(
+                n_jobs=n_jobs,
+                backend='loky',
+                return_as='generator',
+            )(
+                delayed(_run_single_config)(
                     params=params,
                     model_class=self.model_class,
                     X_df=self.X_df,
@@ -381,21 +395,22 @@ class GGSTrainingManager:
                     groups_df=self.groups,
                     n_folds=n_folds,
                 )
-                with checkpoint_lock:
-                    new_results_parallel.append(result)
-                    if idx % checkpoint_every == 0:
-                        save_checkpoint(session, new_results_parallel)
-                return result
+                for params in pending_configs
+            )
 
-            new_results = cast(list[dict], list(Parallel(n_jobs=n_jobs, prefer='threads')(
-                delayed(_run_and_checkpoint)(params, i)
-                for i, params in tqdm(
-                    enumerate(pending_configs, start=1),
+            for i, result in enumerate(
+                tqdm(
+                    results_stream,
                     total=len(pending_configs),
                     desc=f"GGS {self.model_class.__name__}",
                     unit='config',
-                )
-            )))
+                ),
+                start=1,
+            ):
+                if result is not None:
+                    new_results.append(result)
+                if i % checkpoint_every == 0:
+                    save_checkpoint(session, new_results)
 
         # Save final results and remove checkpoint
         save_results(session, new_results)
