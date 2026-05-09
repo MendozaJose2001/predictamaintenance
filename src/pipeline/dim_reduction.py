@@ -1,3 +1,5 @@
+#./src/pipeline/dim_reduction.py
+
 """Dimensionality reduction for the RUL estimation pipeline (Nodo 4).
 
 This module implements PCA-based dimensionality reduction as the fourth

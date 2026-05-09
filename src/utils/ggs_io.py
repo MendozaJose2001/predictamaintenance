@@ -1,3 +1,5 @@
+#./src/utils/ggs_io.py
+
 """I/O support for Group Grid Search — session management and persistence.
 
 This module handles all file I/O for GGSTrainingManager, keeping persistence

@@ -1,3 +1,5 @@
+#./src/pipeline/feature_extraction.py
+
 """Temporal feature extraction for the RUL estimation pipeline.
 
 This module implements Nodo 3 of the pipeline — transforming the 3D window

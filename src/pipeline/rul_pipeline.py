@@ -1,3 +1,5 @@
+#./src/pipeline/rul_pipeline.py
+
 """RUL pipeline orchestrator — Nodos 2 through 4.
 
 This module implements RULPipeline, the single entry point for transforming

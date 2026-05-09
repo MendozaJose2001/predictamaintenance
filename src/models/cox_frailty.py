@@ -1,3 +1,5 @@
+#./src/models/cox_frailty.py
+
 """Cox proportional hazards model with shared frailty for RUL estimation.
 
 This module implements a shared frailty Cox model as a BaseRULModel subclass,

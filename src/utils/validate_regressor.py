@@ -1,3 +1,5 @@
+#./src/utils/validate_regressor.py
+
 """Reusable validation script for RUL regressor models.
 
 Validates any BaseRULModel regressor under two scenarios:

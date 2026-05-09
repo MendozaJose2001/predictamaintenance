@@ -1,3 +1,5 @@
+#./src/models/survival_tree.py
+
 """Survival Tree model for RUL estimation (Nodo 5).
 
 This module implements a scikit-survival SurvivalTree wrapped as a

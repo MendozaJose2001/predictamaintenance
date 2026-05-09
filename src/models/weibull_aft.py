@@ -1,3 +1,5 @@
+#./src/models/weibull_aft.py
+
 """Weibull Accelerated Failure Time model for RUL estimation.
 
 This module implements WeibullAFTModel — a survival analysis approach to

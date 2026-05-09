@@ -1,3 +1,5 @@
+#./src/pipeline/windowing.py
+
 """Sliding window construction for the RUL estimation pipeline.
 
 This module implements Nodo 2 of the pipeline — transforming a flat

@@ -1,3 +1,5 @@
+#./src/ggs_training_manager.py
+
 """Group Grid Search training manager for the new sliding window pipeline.
 
 This module implements GGSTrainingManager — the training orchestrator for

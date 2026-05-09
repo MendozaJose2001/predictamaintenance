@@ -1,3 +1,5 @@
+# ./main.py
+
 """PredictaMaintenance — CLI entry point for GGS model training.
 
 Trains a RUL estimation model using Group Grid Search with GroupKFold

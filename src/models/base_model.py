@@ -1,4 +1,4 @@
-#src/models/base_model.py
+#./src/models/base_model.py
 
 from abc import ABC, abstractmethod
 
