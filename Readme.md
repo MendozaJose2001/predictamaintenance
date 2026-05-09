@@ -13,7 +13,7 @@ Sensores crudos
     ↓ Nodo 2 — Ventanas deslizantes
     ↓ Nodo 3 — Extracción de características estadísticas
     ↓ Nodo 4 — RobustScaler + PCA global
-    ↓ Modelo  — NegativeBinomial o SVR
+    ↓ Modelo  — NegativeBinomial, SVR, DecisionTree o RandomForest
         → MAE, RMSE, S-Score, C-Index
 ```
 
@@ -28,15 +28,18 @@ La selección de hiperparámetros (conjunto de features, tamaño de ventana, com
 │   └── clean/              ← CSVs preprocesados, uno por motor
 ├── src/
 │   ├── pipeline/
-│   │   ├── windowing.py        ← Nodo 2: ventanas deslizantes
-│   │   ├── feature_extraction.py  ← Nodo 3: características estadísticas
-│   │   ├── dim_reduction.py    ← Nodo 4: RobustScaler + PCA
-│   │   └── rul_pipeline.py     ← Orquestador Nodos 2-4
+│   │   ├── windowing.py            ← Nodo 2: ventanas deslizantes
+│   │   ├── feature_extraction.py   ← Nodo 3: características estadísticas
+│   │   ├── dim_reduction.py        ← Nodo 4: RobustScaler + PCA
+│   │   └── rul_pipeline.py         ← Orquestador Nodos 2-4
 │   ├── models/
 │   │   ├── negative_binomial.py
-│   │   └── svr_model.py
+│   │   ├── svr_model.py
+│   │   ├── decision_tree.py
+│   │   └── random_forest.py
 │   ├── utils/
-│   │   └── ggs_io.py           ← I/O del GGS (checkpoints, resultados)
+│   │   ├── ggs_io.py               ← I/O del GGS (checkpoints, resultados)
+│   │   └── validate_regressor.py   ← Validación rápida de cualquier modelo
 │   ├── dataset_manager.py
 │   ├── ggs_training_manager.py
 │   └── metrics_manager.py
@@ -80,17 +83,23 @@ python main.py --model nb
 
 # Entrenar SVR
 python main.py --model svr
+
+# Entrenar Decision Tree
+python main.py --model dt
+
+# Entrenar Random Forest
+python main.py --model rf
 ```
 
 ### Opciones disponibles
 
 ```bash
-python main.py --model nb --folds 5 --top 15 --jobs 2
+python main.py --model rf --folds 5 --top 15 --jobs 2
 ```
 
 | Argumento | Default | Descripción |
 |-----------|---------|-------------|
-| `--model` | requerido | `nb` o `svr` |
+| `--model` | requerido | `nb`, `svr`, `dt` o `rf` |
 | `--folds` | 5 | Número de folds GroupKFold |
 | `--top` | 10 | Configuraciones a mostrar al terminar |
 | `--jobs` | 1 | Núcleos paralelos (ver sección de paralelismo) |
@@ -99,7 +108,8 @@ python main.py --model nb --folds 5 --top 15 --jobs 2
 ### Verificación rápida (2 configs, 2 folds, ~2 min)
 
 ```bash
-python main.py --model nb --debug
+python main.py --model dt --debug
+python main.py --model rf --debug
 ```
 
 ---
@@ -110,16 +120,16 @@ El GGS evalúa configuraciones en paralelo usando `joblib`. El número de núcle
 
 ```bash
 # Secuencial — un config a la vez (default)
-python main.py --model nb
+python main.py --model rf
 
 # 2 núcleos en paralelo
-python main.py --model nb --jobs 2
+python main.py --model rf --jobs 2
 
 # 3 núcleos (recomendado para máquinas con 4+ cores)
-python main.py --model nb --jobs 3
+python main.py --model rf --jobs 3
 
 # Todos los núcleos disponibles
-python main.py --model nb --jobs -1
+python main.py --model rf --jobs -1
 ```
 
 **Comportamiento por modo:**
@@ -127,10 +137,31 @@ python main.py --model nb --jobs -1
 | | `--jobs 1` | `--jobs N>1` |
 |--|-----------|-------------|
 | Progreso | por configuración | por configuración |
-| Checkpointing | ✅ después de cada config | ✅ con lock thread-safe |
+| Checkpointing | ✅ después de cada config | ✅ con proceso principal |
 | Resume | ✅ | ✅ |
 
 **Recomendación:** usar `--jobs 2` o `--jobs 3` — el overhead de comunicación hace que valores más altos no siempre escalen linealmente para este pipeline.
+
+**Nota para Random Forest:** `n_jobs=1` está fijo internamente en el modelo para evitar conflictos con el paralelismo del GGS.
+
+---
+
+## Validación rápida de modelos
+
+Antes de lanzar un GGS completo, se puede validar cualquier modelo con un motor o con GroupKFold:
+
+```bash
+# Entrenamiento completo (140 motores)
+python -m src.utils.validate_regressor --model dt
+python -m src.utils.validate_regressor --model rf
+
+# GroupKFold (simula el GGS real)
+python -m src.utils.validate_regressor --model dt --kfold
+python -m src.utils.validate_regressor --model rf --kfold
+
+# Con parámetros personalizados
+python -m src.utils.validate_regressor --model rf --kfold --window-size 30 --feature-set B
+```
 
 ---
 
@@ -139,7 +170,7 @@ python main.py --model nb --jobs -1
 Al terminar el GGS, los resultados se guardan automáticamente:
 
 ```
-outputs/ggs/results/NegativeBinomialPiecewise_<hash>_<timestamp>.csv
+outputs/ggs/results/{ModelName}_{hash}_{timestamp}.csv
 ```
 
 Cada fila corresponde a una configuración de hiperparámetros con sus métricas promedio en validación cruzada:
@@ -155,6 +186,12 @@ Cada fila corresponde a una configuración de hiperparámetros con sus métricas
 | `mean_MAE` | Error absoluto medio en ciclos |
 | `mean_RMSE` | Error cuadrático medio en ciclos |
 | `Success` | 1 si la config convergió, 0 si falló |
+
+Para analizar los resultados de un GGS:
+
+```bash
+python analyze_ggs_results.py
+```
 
 ### Conjuntos de características disponibles
 
@@ -173,10 +210,10 @@ El sistema guarda un checkpoint después de cada configuración evaluada. Si el 
 
 ```bash
 # Primera ejecución — se interrumpe a mitad
-python main.py --model nb
+python main.py --model rf
 
 # Segunda ejecución — reanuda automáticamente
-python main.py --model nb
+python main.py --model rf
 ```
 
 El checkpoint se identifica por el modelo y el `param_grid`. Si se cambia el `param_grid`, se crea una sesión nueva sin afectar la anterior.
@@ -221,6 +258,32 @@ Los tests usan fixtures session-scoped — Nodo 3 (extracción de features) corr
 | epsilon | 0.01, 0.1 |
 | gamma | 'scale', 0.01 |
 | degree | 2, 3 |
+
+### Decision Tree
+
+| Hiperparámetro | Valores |
+|---------------|---------|
+| feature_set | A, B, C, D |
+| window_size | 15, 20, 25, 30 |
+| n_components | 10, 15, 20 |
+| clipping_threshold | 115, 120, 125, 130 |
+| max_depth | 5, 10, None |
+| min_samples_leaf | 1, 5, 10 |
+| min_samples_split | 2, 10 |
+| max_features | 'sqrt', 1.0 |
+
+### Random Forest
+
+| Hiperparámetro | Valores |
+|---------------|---------|
+| feature_set | A, B, C, D |
+| window_size | 15, 20, 25, 30 |
+| n_components | 10, 15, 20 |
+| clipping_threshold | 115, 120, 125, 130 |
+| n_estimators | 50, 100, 200 |
+| max_depth | 5, 10, None |
+| min_samples_leaf | 1, 5, 10 |
+| max_features | 'sqrt', 1.0 |
 
 ---
 

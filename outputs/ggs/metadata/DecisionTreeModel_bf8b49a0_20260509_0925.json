@@ -1,7 +1,7 @@
 {
-  "model": "SVRModel",
-  "param_hash": "b352965e",
-  "timestamp": "20260508_1020",
+  "model": "DecisionTreeModel",
+  "param_hash": "bf8b49a0",
+  "timestamp": "20260509_0925",
   "n_folds": 2,
   "total_configs": 2,
   "param_grid": {
@@ -18,20 +18,17 @@
     "clipping_threshold": [
       115
     ],
-    "kernel": [
-      "rbf"
+    "max_depth": [
+      5
     ],
-    "C": [
-      0.1
+    "min_samples_leaf": [
+      1
     ],
-    "epsilon": [
-      0.01
-    ],
-    "gamma": [
-      "scale"
-    ],
-    "degree": [
+    "min_samples_split": [
       2
+    ],
+    "max_features": [
+      "sqrt"
     ]
   }
 }

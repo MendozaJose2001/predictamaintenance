@@ -6,6 +6,8 @@ cross-validation over the C-MAPSS FD001 dataset.
 Usage:
     python main.py --model nb     # NegativeBinomialPiecewise
     python main.py --model svr    # SVRModel
+    python main.py --model dt     # DecisionTreeModel
+    python main.py --model rf     # RandomForestModel
 
 Results are saved automatically to outputs/ggs/results/.
 If a previous run was interrupted, the GGS resumes from the last checkpoint.
@@ -17,7 +19,6 @@ Output files (outputs/ggs/):
 """
 
 import argparse
-import sys
 from pathlib import Path
 
 import pandas as pd
@@ -26,6 +27,8 @@ from src.dataset_manager import DatasetManager
 from src.ggs_training_manager import GGSTrainingManager
 from src.models.negative_binomial import NegativeBinomialPiecewise
 from src.models.svr_model import SVRModel
+from src.models.decision_tree import DecisionTreeModel
+from src.models.random_forest import RandomForestModel
 
 
 # ---------------------------------------------------------------------------
@@ -37,10 +40,10 @@ _PARAM_GRID_NB = {
     'window_size':        [15, 20, 25, 30],
     'n_components':       [10, 15, 20],
     'clipping_threshold': [115, 120, 125, 130],
-    'link_type':          ['log'],          # ← solo canónico
+    'link_type':          ['log'],
     'alpha':              [0.1, 0.5, 1.0, 1.5],
-    'alpha_reg':          [0.0, 0.1, 0.5],  # ← quitas 0.05
-    'l1_ratio':           [0.0, 0.5, 1.0],  # ← quitas 0.75
+    'alpha_reg':          [0.0, 0.1, 0.5],
+    'l1_ratio':           [0.0, 0.5, 1.0],
 }
 
 _PARAM_GRID_SVR = {
@@ -49,16 +52,41 @@ _PARAM_GRID_SVR = {
     'n_components':       [10, 15, 20],
     'clipping_threshold': [115, 120, 125, 130],
     'kernel':             ['rbf', 'linear', 'poly'],
-    'C':                  [0.1, 1.0, 10.0],        # ← quitas 100.0
-    'epsilon':            [0.01, 0.1],             # ← quitas 1.0
-    'gamma':              ['scale', 0.01],       # ← o ['scale', 'auto']
+    'C':                  [0.1, 1.0, 10.0],
+    'epsilon':            [0.01, 0.1],
+    'gamma':              ['scale', 0.01],
     'degree':             [2, 3],
+}
+
+_PARAM_GRID_DT = {
+    'feature_set':        ['A', 'B', 'C', 'D'],
+    'window_size':        [15, 20, 25, 30],
+    'n_components':       [10, 15, 20],
+    'clipping_threshold': [115, 120, 125, 130],
+    'max_depth':          [5, 10, None],
+    'min_samples_leaf':   [1, 5, 10],
+    'min_samples_split':  [2, 10],
+    'max_features':       ['sqrt', 1.0],
+}
+
+_PARAM_GRID_RF = {
+    'feature_set':        ['A', 'B', 'C', 'D'],
+    'window_size':        [15, 20, 25, 30],
+    'n_components':       [10, 15, 20],
+    'clipping_threshold': [115, 120, 125, 130],
+    'n_estimators':       [50, 100, 200],
+    'max_depth':          [5, 10, None],
+    'min_samples_leaf':   [1, 5, 10],
+    'max_features':       ['sqrt', 1.0],
 }
 
 _MODELS: dict = {
     'nb':  (NegativeBinomialPiecewise, _PARAM_GRID_NB),
-    'svr': (SVRModel, _PARAM_GRID_SVR),
+    'svr': (SVRModel,                  _PARAM_GRID_SVR),
+    'dt':  (DecisionTreeModel,         _PARAM_GRID_DT),
+    'rf':  (RandomForestModel,         _PARAM_GRID_RF),
 }
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -72,6 +100,8 @@ def _parse_args() -> argparse.Namespace:
 Examples:
   python main.py --model nb
   python main.py --model svr
+  python main.py --model dt --jobs 2
+  python main.py --model rf --jobs 3
   python main.py --model nb --folds 3 --top 15
         """,
     )
@@ -79,7 +109,7 @@ Examples:
         '--model',
         choices=list(_MODELS.keys()),
         required=True,
-        help='Model to train: nb (NegativeBinomial) or svr (SVR)',
+        help='Model to train: nb, svr, dt, rf',
     )
     parser.add_argument(
         '--folds',
@@ -122,8 +152,7 @@ def _load_data() -> tuple:
         df.insert(0, 'unit_number', idx)
         dfs.append(df)
 
-    import pandas as _pd
-    df_all = _pd.concat(dfs, ignore_index=True)
+    df_all = pd.concat(dfs, ignore_index=True)
     X_df   = df_all.drop(columns=['RUL'])
     y_df   = df_all[['unit_number', 'time_in_cycles', 'RUL']].copy()
     groups = df_all['unit_number'].to_numpy()
@@ -143,8 +172,9 @@ def main() -> None:
 
     # Debug mode — minimal grid for quick validation
     if args.debug:
-        param_grid = {k: v[:1] for k, v in param_grid.items()}
-        param_grid['feature_set'] = ['A', 'B']  # at least 2 sets
+        param_grid = {k: v[:1] if isinstance(v, list) else [v]
+                      for k, v in param_grid.items()}
+        param_grid['feature_set'] = ['A', 'B']
         args.folds = 2
         print("\n  ⚡ DEBUG MODE — reduced grid, 2 folds")
 
