@@ -1,0 +1,51 @@
+{
+  "model": "RandomForestModel",
+  "param_hash": "467bdc30",
+  "timestamp": "20260509_1125",
+  "n_folds": 5,
+  "total_configs": 10368,
+  "param_grid": {
+    "feature_set": [
+      "A",
+      "B",
+      "C",
+      "D"
+    ],
+    "window_size": [
+      15,
+      20,
+      25,
+      30
+    ],
+    "n_components": [
+      10,
+      15,
+      20
+    ],
+    "clipping_threshold": [
+      115,
+      120,
+      125,
+      130
+    ],
+    "n_estimators": [
+      50,
+      100,
+      200
+    ],
+    "max_depth": [
+      5,
+      10,
+      null
+    ],
+    "min_samples_leaf": [
+      1,
+      5,
+      10
+    ],
+    "max_features": [
+      "sqrt",
+      1.0
+    ]
+  }
+}
