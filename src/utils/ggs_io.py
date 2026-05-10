@@ -1,5 +1,3 @@
-#./src/utils/ggs_io.py
-
 """I/O support for Group Grid Search — session management and persistence.
 
 This module handles all file I/O for GGSTrainingManager, keeping persistence
@@ -34,10 +32,18 @@ Config identification:
     string key — the sorted serialization of its param dict. This key
     is stored in the checkpoint and used to detect which configs have
     already been evaluated.
+
+    Note on CSV round-trip normalization:
+        When a checkpoint is reloaded from CSV, pandas converts integer
+        columns that contain None to float64 (e.g. max_depth=5 → 5.0,
+        max_depth=None → NaN). config_key normalizes these values before
+        serialization to guarantee that keys computed from in-memory dicts
+        and keys reconstructed from CSV rows are identical.
 """
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -85,19 +91,95 @@ def compute_param_grid_hash(param_grid: dict) -> str:
     return hashlib.md5(serialized.encode()).hexdigest()[:8]
 
 
+def _normalize_param(v: object) -> object:
+    """Normalizes a hyperparameter value before string serialization.
+
+    The only normalization needed is NaN → None, since pandas converts
+    None in mixed int/None columns (e.g. max_depth) to NaN when reading
+    from CSV. All other type differences are handled by _coerce_to_grid_types
+    which uses the param_grid as the type reference.
+
+    Args:
+        v: Hyperparameter value as loaded from a result dict or CSV row.
+
+    Returns:
+        None if v is NaN, otherwise v unchanged.
+    """
+    import numpy as np
+    if isinstance(v, (float, np.floating)) and math.isnan(v):
+        return None
+    return v
+
+
+def _coerce_to_grid_types(row: dict, param_grid: dict) -> dict:
+    """Coerces CSV row values to match the types defined in param_grid.
+
+    When pandas reads a checkpoint CSV, columns that contain a mix of
+    integers and None are stored as float64 (e.g. max_depth=5 → 5.0,
+    max_depth=None → NaN). This function uses the param_grid as the
+    authoritative type reference to restore the original Python types.
+
+    Coercion rules per key:
+        - If the value is NaN → None (regardless of grid type)
+        - If the grid contains int values for this key and the CSV value
+          is float → cast to int (e.g. 5.0 → 5)
+        - Otherwise → leave unchanged
+
+    TECHNICAL DEBT:
+        This approach is fragile because it depends on param_grid being
+        available at read time and assumes the grid types are the source
+        of truth. A more robust solution would normalize types at write
+        time in save_checkpoint — serializing None as the string 'None'
+        explicitly, and deserializing back in resolve_ggs_session. This
+        would make config_key a pure function with no external context.
+        Migration requires a clean checkpoint (no existing CSV to preserve),
+        so this refactor is deferred until the next full GGS run.
+
+    Args:
+        row:        Single result dict as loaded from a checkpoint CSV row.
+        param_grid: The param_grid defining valid values per hyperparameter.
+
+    Returns:
+        Dict with values coerced to match the types in param_grid.
+    """
+    import numpy as np
+    result = {}
+    for k in param_grid:
+        if k not in row:
+            continue
+        v = row[k]
+        # NaN always maps to None
+        if isinstance(v, (float, np.floating)) and math.isnan(v):
+            result[k] = None
+            continue
+        # If grid has int values for this key and CSV gave a float → cast to int
+        grid_types = {type(x) for x in param_grid[k] if x is not None}
+        if int in grid_types and isinstance(v, (float, np.floating)):
+            result[k] = int(v)
+        else:
+            result[k] = v
+    return result
+
+
 def config_key(params: dict) -> str:
     """Computes a deterministic string key for a single hyperparameter config.
 
     Used to identify which configurations have already been evaluated in
     a previous run. The key is the sorted serialization of the param dict.
 
+    Applies _normalize_param to handle NaN → None before serialization.
+    For full CSV round-trip consistency, values should be coerced via
+    _coerce_to_grid_types before calling this function.
+
     Args:
         params: Flat dictionary of hyperparameter values for one config.
 
     Returns:
-        String of the form "[('key1', val1), ('key2', val2), ...]".
+        String of the form "[('key1', 'val1'), ('key2', 'val2'), ...]".
     """
-    return str(sorted((k, str(v)) for k, v in params.items()))
+    return str(sorted(
+        (k, str(_normalize_param(v))) for k, v in params.items()
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +271,7 @@ def resolve_ggs_session(
         checkpoint_df = pd.read_csv(path_checkpoint)
         prior_results = checkpoint_df.to_dict(orient='records')
         completed_keys = {
-            config_key(_extract_params(r, param_grid))
+            config_key(_coerce_to_grid_types(_extract_params(r, param_grid), param_grid))
             for r in prior_results
         }
 
