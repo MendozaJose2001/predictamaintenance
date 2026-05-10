@@ -1,3 +1,0 @@
-feature_set,window_size,n_components,clipping_threshold,n_estimators,max_depth,min_samples_leaf,max_features,mean_S_score,mean_C_index,mean_MAE,mean_RMSE
-A,15,10,115,50,5,1,sqrt,6.301298825863486,0.8566606644712718,13.016549267329314,16.06990527512919
-B,15,10,115,50,5,1,sqrt,6.943045203518299,0.8504843950885742,13.629682038345173,16.674508051408612

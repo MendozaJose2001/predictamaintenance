@@ -1,0 +1,18 @@
+{
+  "model_name": "NegativeBinomialPiecewise",
+  "timestamp": "20260509_1811",
+  "model_file": "NegativeBinomialPiecewise_B_30w_20pc_20260509_1811.pkl",
+  "pipeline_params": {
+    "feature_set": "B",
+    "window_size": 30,
+    "n_components": 20,
+    "clipping_threshold": 115
+  },
+  "model_params": {
+    "alpha": 0.1,
+    "alpha_reg": 0.0,
+    "l1_ratio": 0.0,
+    "link_type": "log"
+  },
+  "metrics": {}
+}

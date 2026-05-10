@@ -1,5 +1,3 @@
-# ./main.py
-
 """PredictaMaintenance — CLI entry point for GGS model training.
 
 Trains a RUL estimation model using Group Grid Search with GroupKFold
@@ -10,6 +8,7 @@ Usage:
     python main.py --model svr    # SVRModel
     python main.py --model dt     # DecisionTreeModel
     python main.py --model rf     # RandomForestModel
+    python main.py --model xgb    # XGBModel
 
 Results are saved automatically to outputs/ggs/results/.
 If a previous run was interrupted, the GGS resumes from the last checkpoint.
@@ -31,6 +30,7 @@ from src.models.negative_binomial import NegativeBinomialPiecewise
 from src.models.svr_model import SVRModel
 from src.models.decision_tree import DecisionTreeModel
 from src.models.random_forest import RandomForestModel
+from src.models.xgb_model import XGBModel
 
 
 # ---------------------------------------------------------------------------
@@ -82,11 +82,26 @@ _PARAM_GRID_RF = {
     'max_features':       ['sqrt', 1.0],
 }
 
+_PARAM_GRID_XGB = {
+    'feature_set':        ['A', 'B', 'C', 'D'],
+    'window_size':        [20, 25, 30],
+    'n_components':       [10, 15, 20],
+    'clipping_threshold': [115, 120, 125],
+    'n_estimators':       [200, 300],
+    'learning_rate':      [0.05, 0.1],
+    'max_depth':          [3, 5],
+    'subsample':          [0.8, 1.0],
+    'colsample_bytree':   [0.8, 1.0],
+    'reg_lambda':         [0.1, 1.0, 10.0],
+    'min_child_weight':   [1, 5],
+}
+
 _MODELS: dict = {
     'nb':  (NegativeBinomialPiecewise, _PARAM_GRID_NB),
     'svr': (SVRModel,                  _PARAM_GRID_SVR),
     'dt':  (DecisionTreeModel,         _PARAM_GRID_DT),
     'rf':  (RandomForestModel,         _PARAM_GRID_RF),
+    'xgb': (XGBModel,                  _PARAM_GRID_XGB),
 }
 
 
@@ -104,6 +119,7 @@ Examples:
   python main.py --model svr
   python main.py --model dt --jobs 2
   python main.py --model rf --jobs 3
+  python main.py --model xgb --jobs 2
   python main.py --model nb --folds 3 --top 15
         """,
     )
@@ -111,7 +127,7 @@ Examples:
         '--model',
         choices=list(_MODELS.keys()),
         required=True,
-        help='Model to train: nb, svr, dt, rf',
+        help='Model to train: nb, svr, dt, rf, xgb',
     )
     parser.add_argument(
         '--folds',

@@ -21,12 +21,12 @@ Design decisions:
         integración con herramientas sklearn. RegressorMixin provee score()
         como bonus sin costo adicional.
 
-    Hiperparámetros en __init__:
+    Extracción automática de hiperparámetros desde pipeline:
         Los hiperparámetros de configuración (feature_set, window_size,
-        n_components, clipping_threshold) se exponen explícitamente en
-        __init__ además de pipeline y model. Esto garantiza que get_params()
-        devuelva la configuración completa del sistema sin necesidad de
-        inspeccionar el pipeline internamente — útil para metadata y logging.
+        n_components, clipping_threshold) se extraen directamente del
+        pipeline recibido en __init__. Esto elimina redundancia — el caller
+        no repite información que ya está dentro del pipeline — y garantiza
+        consistencia interna.
 
     Doble referencia a pipeline y model:
         pipeline y model se almacenan tanto como self.pipeline / self.model
@@ -39,6 +39,16 @@ Design decisions:
         model_ (sin guión simple) sacrificando get_params() para pipeline/model,
         eliminando la redundancia. Requiere verificar si algún componente
         downstream depende de get_params() para estos atributos.
+
+    from_config — factory method para construcción completa:
+        El classmethod from_config recibe la clase del modelo y un dict
+        plano de hiperparámetros (pipeline + modelo mezclados) junto con
+        los DataFrames de entrenamiento. Internamente separa los params
+        usando _PIPELINE_PARAMS, construye y entrena el pipeline y el
+        modelo, y retorna un RULProductionPredictor listo para producción.
+        Es el punto de entrada recomendado para construir predictores — evita
+        que el caller tenga que gestionar la construcción y entrenamiento
+        de pipeline y modelo por separado.
 
     predict() recibe DataFrame crudo:
         A diferencia de BaseRULModel.predict() que recibe arrays PCA-reducidos,
@@ -75,6 +85,32 @@ from src.models.base_model import BaseRULModel
 from src.pipeline.rul_pipeline import RULPipeline
 
 
+# Claves que pertenecen al pipeline — misma definición que ggs_training_manager
+_PIPELINE_PARAMS: frozenset[str] = frozenset({
+    'feature_set',
+    'window_size',
+    'n_components',
+    'clipping_threshold',
+})
+
+
+def _split_params(params: dict) -> tuple[dict, dict]:
+    """Splits a flat param dict into pipeline and model param dicts.
+
+    Reuses the same logic as ggs_training_manager._split_params — keeps
+    the separation contract consistent across the project.
+
+    Args:
+        params: Flat dictionary with all hyperparameters mixed.
+
+    Returns:
+        Tuple of (pipeline_params, model_params).
+    """
+    pipeline_params = {k: v for k, v in params.items() if k in _PIPELINE_PARAMS}
+    model_params    = {k: v for k, v in params.items() if k not in _PIPELINE_PARAMS}
+    return pipeline_params, model_params
+
+
 class RULProductionPredictor(BaseEstimator, RegressorMixin):
     """Frozen Estimator para inferencia RUL en producción.
 
@@ -83,23 +119,17 @@ class RULProductionPredictor(BaseEstimator, RegressorMixin):
     y devuelve predicciones de RUL en ciclos.
 
     El objeto es una caja negra de inferencia — no soporta reentrenamiento.
-    Para entrenar un nuevo modelo usar GGSTrainingManager y construir un
-    nuevo RULProductionPredictor con los resultados.
+    Para construir un predictor desde hiperparámetros usar el classmethod
+    from_config(), que gestiona internamente la construcción y entrenamiento
+    del pipeline y el modelo.
 
     Args:
-        pipeline: RULPipeline ya entrenado (is_fitted_=True). Debe contener
-            el DimReducer ajustado sobre los datos de entrenamiento.
+        pipeline: RULPipeline ya entrenado (is_fitted_=True). Los
+            hiperparámetros de configuración se extraen automáticamente
+            de este objeto.
         model: BaseRULModel ya entrenado (is_fitted_=True). Cualquier
             subclase compatible: DecisionTreeModel, RandomForestModel,
             SVRModel, NegativeBinomialPiecewise.
-        feature_set: Clave del conjunto de features usado en Nodo 3.
-            Uno de: 'A', 'B', 'C', 'D'. Almacenado para metadata.
-        window_size: Tamaño de ventana deslizante usado en Nodo 2.
-            Almacenado para metadata e introspección.
-        n_components: Número de componentes PCA usados en Nodo 4.
-            Almacenado para metadata e introspección.
-        clipping_threshold: Umbral de clipping RUL aplicado en predicción.
-            Almacenado para metadata e introspección.
         model_name: Nombre legible del modelo para logging y metadata.
             Si None, se infiere de model.__class__.__name__. Defaults to None.
 
@@ -107,19 +137,26 @@ class RULProductionPredictor(BaseEstimator, RegressorMixin):
         pipeline_: RULPipeline entrenado. Disponible tras construcción.
         model_: BaseRULModel entrenado. Disponible tras construcción.
         model_name_: Nombre del modelo resuelto. Disponible tras construcción.
+        feature_set: Extraído de pipeline.feature_set.
+        window_size: Extraído de pipeline.window_size.
+        n_components: Extraído de pipeline.n_components.
+        clipping_threshold: Extraído de pipeline.clipping_threshold.
 
     Raises:
         ValueError: Si pipeline.is_fitted_ es False.
         ValueError: Si model.is_fitted_ es False.
 
     Example:
-        >>> predictor = RULProductionPredictor(
-        ...     pipeline=trained_pipeline,
-        ...     model=trained_model,
-        ...     feature_set='D',
-        ...     window_size=30,
-        ...     n_components=15,
-        ...     clipping_threshold=125,
+        >>> # Construcción recomendada — via from_config
+        >>> predictor = RULProductionPredictor.from_config(
+        ...     model_class=NegativeBinomialPiecewise,
+        ...     params={
+        ...         'feature_set': 'B', 'window_size': 30,
+        ...         'n_components': 20, 'clipping_threshold': 115,
+        ...         'link_type': 'log', 'alpha': 0.1,
+        ...     },
+        ...     X_df=X_df,
+        ...     y_df=y_df,
         ... )
         >>> # Predicción estándar — última ventana
         >>> rul_now = predictor.predict(df_motor)
@@ -131,10 +168,6 @@ class RULProductionPredictor(BaseEstimator, RegressorMixin):
         self,
         pipeline: RULPipeline,
         model: BaseRULModel,
-        feature_set: str,
-        window_size: int,
-        n_components: int,
-        clipping_threshold: int,
         model_name: str | None = None,
     ) -> None:
         # Validar que pipeline y modelo estén entrenados antes de almacenarlos
@@ -149,24 +182,177 @@ class RULProductionPredictor(BaseEstimator, RegressorMixin):
                 "Llama a model.fit() antes de construir el predictor."
             )
 
-        # Hiperparámetros expuestos en __init__ para get_params() sklearn.
-        # Nota: pipeline y model aparecen también como pipeline_ y model_
-        # (ver Design decisions — Doble referencia en docstring de módulo).
-        self.pipeline = pipeline
-        self.model = model
-        self.feature_set = feature_set
-        self.window_size = window_size
-        self.n_components = n_components
-        self.clipping_threshold = clipping_threshold
+        # Argumentos de __init__ — para get_params() sklearn
+        self.pipeline   = pipeline
+        self.model      = model
         self.model_name = model_name
 
+        # Hiperparámetros extraídos del pipeline — única fuente de verdad
+        self.feature_set:        str = pipeline.feature_set
+        self.window_size:        int = pipeline.window_size
+        self.n_components:       int = pipeline.n_components
+        self.clipping_threshold: int = pipeline.clipping_threshold
+
         # Atributos post-construcción — convenio sklearn con guión bajo
-        self.pipeline_: RULPipeline = pipeline
-        self.model_: BaseRULModel = model
-        self.model_name_: str = (
+        self.pipeline_: RULPipeline  = pipeline
+        self.model_: BaseRULModel    = model
+        self.model_name_: str        = (
             model_name
             if model_name is not None
             else model.__class__.__name__
+        )
+
+    @staticmethod
+    def _load_training_data() -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Loads the full training partition from DatasetManager.
+
+        Reads the 140 training motors from data/clean/ and assembles
+        X_df and y_df ready for pipeline.fit_transform().
+
+        Returns:
+            Tuple of (X_df, y_df) where:
+                X_df: Feature DataFrame without RUL column.
+                y_df: Target DataFrame with unit_number, time_in_cycles, RUL.
+        """
+        from src.dataset_manager import DatasetManager
+
+        m_train, _ = DatasetManager.split_dataset()
+
+        dfs = []
+        for idx in m_train:
+            df = pd.read_csv(f'data/clean/data_motor_{idx}.csv')
+            df.insert(0, 'unit_number', idx)
+            dfs.append(df)
+
+        df_all = pd.concat(dfs, ignore_index=True)
+        X_df = df_all.drop(columns=['RUL'])
+        y_df = df_all[['unit_number', 'time_in_cycles', 'RUL']].copy()
+
+        return X_df, y_df
+
+    @classmethod
+    def from_config(
+        cls,
+        model_class: type,
+        params: dict,
+        X_df: pd.DataFrame | None = None,
+        y_df: pd.DataFrame | None = None,
+        model_name: str | None = None,
+    ) -> 'RULProductionPredictor':
+        """Construye un RULProductionPredictor desde hiperparámetros y datos.
+
+        Factory method recomendado para construir predictores de producción.
+        Recibe un dict plano con todos los hiperparámetros (pipeline + modelo
+        mezclados), los separa internamente, construye y entrena el pipeline
+        y el modelo, y retorna un RULProductionPredictor listo para inferencia.
+
+        Las claves de pipeline (feature_set, window_size, n_components,
+        clipping_threshold) se separan automáticamente de las claves del
+        modelo — el caller no necesita hacer esta distinción.
+
+        Si X_df e y_df no se proporcionan, los datos de entrenamiento se
+        cargan automáticamente desde DatasetManager (140 motores de train
+        del dataset C-MAPSS FD001).
+
+        Args:
+            model_class: Clase del modelo a instanciar. Debe ser una subclase
+                de BaseRULModel compatible con el sliding window pipeline:
+                NegativeBinomialPiecewise, SVRModel, DecisionTreeModel,
+                RandomForestModel.
+            params: Dict plano con todos los hiperparámetros mezclados.
+                Las claves de pipeline (feature_set, window_size, n_components,
+                clipping_threshold) se separan automáticamente. El resto
+                se pasa al constructor del modelo.
+            X_df: DataFrame de entrenamiento sin columna RUL. Si None,
+                se carga automáticamente via DatasetManager. Defaults to None.
+            y_df: DataFrame con columnas unit_number, time_in_cycles, RUL.
+                Si None, se carga automáticamente via DatasetManager.
+                Defaults to None.
+            model_name: Nombre legible para logging y metadata. Si None,
+                se infiere de model_class.__name__. Defaults to None.
+
+        Returns:
+            RULProductionPredictor listo para inferencia.
+
+        Example:
+            >>> # Uso mínimo — carga datos automáticamente
+            >>> predictor = RULProductionPredictor.from_config(
+            ...     model_class=NegativeBinomialPiecewise,
+            ...     params={
+            ...         'feature_set': 'B', 'window_size': 30,
+            ...         'n_components': 20, 'clipping_threshold': 115,
+            ...         'link_type': 'log', 'alpha': 0.1,
+            ...         'alpha_reg': 0.0, 'l1_ratio': 0.0,
+            ...     },
+            ... )
+            >>> # Uso con datos externos
+            >>> predictor = RULProductionPredictor.from_config(
+            ...     model_class=NegativeBinomialPiecewise,
+            ...     params={...},
+            ...     X_df=X_df,
+            ...     y_df=y_df,
+            ... )
+        """
+        # Cargar datos si no se proporcionan
+        if X_df is None or y_df is None:
+            X_df, y_df = cls._load_training_data()
+
+        pipeline_params, model_params = _split_params(params)
+
+        # Construir y entrenar pipeline sobre datos completos de train
+        pipeline = RULPipeline(**pipeline_params)
+        X, y_rul, t_stop, evento, groups = pipeline.fit_transform(X_df, y_df)
+
+        # Construir y entrenar modelo sobre output del pipeline
+        model = model_class(
+            **model_params,
+            clipping_threshold=pipeline_params['clipping_threshold'],
+        )
+        model.fit(X, y_rul)
+
+        return cls(
+            pipeline=pipeline,
+            model=model,
+            model_name=model_name,
+        )
+
+    def save(
+        self,
+        metrics: dict | None = None,
+        base_dir=None,
+    ):
+        """Serializa el predictor y escribe su metadata JSON.
+
+        Wrapper conveniente sobre predictor_io.save_predictor() — permite
+        guardar el predictor directamente desde el objeto sin importar
+        explícitamente el módulo de I/O.
+
+        Args:
+            metrics: Dict con métricas de validación cruzada del GGS.
+                Claves recomendadas: mean_S_score, mean_MAE, mean_RMSE,
+                mean_C_index. Si None, se guarda como dict vacío.
+                Defaults to None.
+            base_dir: Directorio raíz para outputs de producción.
+                Si None, usa el default de predictor_io
+                (outputs/production/). Defaults to None.
+
+        Returns:
+            PredictorSession con paths y metadata del predictor guardado.
+
+        Example:
+            >>> session = predictor.save()
+            >>> session = predictor.save(metrics={"mean_S_score": 12.3})
+        """
+        from pathlib import Path
+        from src.utils.predictor_io import save_predictor, _DEFAULT_BASE_DIR
+
+        resolved_metrics  = metrics  if metrics  is not None else {}
+        resolved_base_dir = Path(base_dir) if base_dir is not None else _DEFAULT_BASE_DIR
+
+        return save_predictor(
+            predictor=self,
+            metrics=resolved_metrics,
+            base_dir=resolved_base_dir,
         )
 
     def fit(
@@ -183,7 +369,7 @@ class RULProductionPredictor(BaseEstimator, RegressorMixin):
         raise NotImplementedError(
             "RULProductionPredictor es inmutable — no soporta reentrenamiento. "
             "Para entrenar un nuevo modelo usa GGSTrainingManager y construye "
-            "un nuevo RULProductionPredictor con los resultados."
+            "un nuevo RULProductionPredictor con from_config()."
         )
 
     def predict(
