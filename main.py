@@ -87,7 +87,7 @@ _PARAM_GRID_XGB = {
     'window_size':        [20, 25, 30],
     'n_components':       [10, 15, 20],
     'clipping_threshold': [115, 120, 125],
-    'n_estimators':       [200, 300],
+    'n_estimators':       [100, 200, 300],
     'learning_rate':      [0.05, 0.1],
     'max_depth':          [3, 5],
     'subsample':          [0.8, 1.0],
