@@ -1,0 +1,60 @@
+{
+  "model": "XGBModel",
+  "param_hash": "43704765",
+  "timestamp": "20260511_1444",
+  "n_folds": 5,
+  "total_configs": 31104,
+  "param_grid": {
+    "feature_set": [
+      "A",
+      "B",
+      "C",
+      "D"
+    ],
+    "window_size": [
+      20,
+      25,
+      30
+    ],
+    "n_components": [
+      10,
+      15,
+      20
+    ],
+    "clipping_threshold": [
+      115,
+      120,
+      125
+    ],
+    "n_estimators": [
+      100,
+      200,
+      300
+    ],
+    "learning_rate": [
+      0.05,
+      0.1
+    ],
+    "max_depth": [
+      3,
+      5
+    ],
+    "subsample": [
+      0.8,
+      1.0
+    ],
+    "colsample_bytree": [
+      0.8,
+      1.0
+    ],
+    "reg_lambda": [
+      0.1,
+      1.0,
+      10.0
+    ],
+    "min_child_weight": [
+      1,
+      5
+    ]
+  }
+}
