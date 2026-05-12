@@ -1,0 +1,34 @@
+{
+  "model": "NegativeBinomialPiecewise",
+  "param_hash": "904ac0be",
+  "timestamp": "20260509_1113",
+  "n_folds": 2,
+  "total_configs": 2,
+  "param_grid": {
+    "feature_set": [
+      "A",
+      "B"
+    ],
+    "window_size": [
+      15
+    ],
+    "n_components": [
+      10
+    ],
+    "clipping_threshold": [
+      115
+    ],
+    "link_type": [
+      "log"
+    ],
+    "alpha": [
+      0.1
+    ],
+    "alpha_reg": [
+      0.0
+    ],
+    "l1_ratio": [
+      0.0
+    ]
+  }
+}

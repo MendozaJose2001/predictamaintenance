@@ -1,0 +1,34 @@
+{
+  "model": "WeibullAFTModel",
+  "param_hash": "0067c6e3",
+  "timestamp": "20260512_1117",
+  "n_folds": 2,
+  "total_configs": 2,
+  "param_grid": {
+    "feature_set": [
+      "A",
+      "B"
+    ],
+    "window_size": [
+      20
+    ],
+    "n_components": [
+      10
+    ],
+    "clipping_threshold": [
+      115
+    ],
+    "confidence_threshold": [
+      0.3
+    ],
+    "penalizer": [
+      0.0
+    ],
+    "l1_ratio": [
+      0.0
+    ],
+    "fit_intercept": [
+      true
+    ]
+  }
+}
