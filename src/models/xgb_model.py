@@ -1,3 +1,5 @@
+#./src/models/xgb_model.py
+
 """XGBoost Regressor model for RUL estimation.
 
 This module implements XGBModel as a BaseRULModel subclass compatible

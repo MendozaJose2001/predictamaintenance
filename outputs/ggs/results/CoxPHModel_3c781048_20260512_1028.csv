@@ -1,0 +1,3 @@
+feature_set,window_size,n_components,clipping_threshold,baseline_estimation_method,n_baseline_knots,penalizer,l1_ratio,confidence_threshold,mean_S_score,mean_C_index,mean_MAE,mean_RMSE
+A,20,10,125,breslow,3,0.1,0.0,0.5,82.00314838844409,0.8004565230707339,22.958464209939905,30.198438341329968
+B,20,10,125,breslow,3,0.1,0.0,0.5,82.00314838844409,0.8004565230707339,22.958464209939905,30.198438341329968

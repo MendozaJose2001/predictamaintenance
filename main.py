@@ -9,6 +9,8 @@ Usage:
     python main.py --model dt     # DecisionTreeModel
     python main.py --model rf     # RandomForestModel
     python main.py --model xgb    # XGBModel
+    python main.py --model cox    # CoxPHModel
+    python main.py --model aft    # WeibullAFTModel
 
 Results are saved automatically to outputs/ggs/results/.
 If a previous run was interrupted, the GGS resumes from the last checkpoint.
@@ -31,6 +33,8 @@ from src.models.svr_model import SVRModel
 from src.models.decision_tree import DecisionTreeModel
 from src.models.random_forest import RandomForestModel
 from src.models.xgb_model import XGBModel
+from src.models.cox_ph import CoxPHModel
+from src.models.weibull_aft import WeibullAFTModel
 
 
 # ---------------------------------------------------------------------------
@@ -96,12 +100,41 @@ _PARAM_GRID_XGB = {
     'min_child_weight':   [1, 5],
 }
 
+_PARAM_GRID_COX = {
+    # Pipeline
+    'feature_set':                ['A', 'B', 'C', 'D'],
+    'window_size':                [20, 25, 30],
+    'n_components':               [10, 15, 20],
+    'clipping_threshold':         [115, 120, 125],
+    # Model
+    'baseline_estimation_method': ['breslow', 'spline'],
+    'n_baseline_knots':           [3, 5],
+    'penalizer':                  [0.0, 0.1, 1.0],
+    'l1_ratio':                   [0.0, 0.5, 1.0],
+    'confidence_threshold':       [0.3, 0.5, 0.95],
+}
+
+_PARAM_GRID_AFT = {
+    # Pipeline
+    'feature_set':          ['A', 'B', 'C', 'D'],
+    'window_size':          [20, 25, 30],
+    'n_components':         [10, 15, 20],
+    'clipping_threshold':   [115, 120, 125],
+    # Model
+    'confidence_threshold': [0.3, 0.5, 0.95],
+    'penalizer':            [0.0, 0.1, 1.0],
+    'l1_ratio':             [0.0, 0.5, 1.0],
+    'fit_intercept':        [True, False],
+}
+
 _MODELS: dict = {
     'nb':  (NegativeBinomialPiecewise, _PARAM_GRID_NB),
     'svr': (SVRModel,                  _PARAM_GRID_SVR),
     'dt':  (DecisionTreeModel,         _PARAM_GRID_DT),
     'rf':  (RandomForestModel,         _PARAM_GRID_RF),
     'xgb': (XGBModel,                  _PARAM_GRID_XGB),
+    'cox': (CoxPHModel,                _PARAM_GRID_COX),
+    'aft': (WeibullAFTModel,           _PARAM_GRID_AFT),
 }
 
 
@@ -120,6 +153,8 @@ Examples:
   python main.py --model dt --jobs 2
   python main.py --model rf --jobs 3
   python main.py --model xgb --jobs 2
+  python main.py --model cox --jobs 2
+  python main.py --model aft --jobs 2
   python main.py --model nb --folds 3 --top 15
         """,
     )
@@ -127,7 +162,7 @@ Examples:
         '--model',
         choices=list(_MODELS.keys()),
         required=True,
-        help='Model to train: nb, svr, dt, rf, xgb',
+        help='Model to train: nb, svr, dt, rf, xgb, cox, aft',
     )
     parser.add_argument(
         '--folds',
@@ -160,7 +195,7 @@ Examples:
 # ---------------------------------------------------------------------------
 
 def _load_data() -> tuple:
-    """Loads all 200 motors and splits into train/test via DatasetManager."""
+    """Loads all training motors and splits into train/test via DatasetManager."""
     print("\nLoading dataset...")
     m_train, m_test = DatasetManager.split_dataset()
 

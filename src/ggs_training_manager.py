@@ -34,6 +34,17 @@ Model hyperparameters in param_grid:
     params above. Examples:
         NegativeBinomialPiecewise: alpha, alpha_reg, l1_ratio, link_type
         SVRModel:                  C, epsilon, kernel, gamma, degree
+        CoxPHModel:                confidence_threshold, baseline_estimation_method,
+                                   n_baseline_knots, penalizer, l1_ratio
+        WeibullAFTModel:           confidence_threshold, penalizer, l1_ratio
+
+Survival model compatibility:
+    Models that implement predict_with_time(X, t_stop) — CoxPHModel,
+    WeibullAFTModel, SurvivalTreeModel — require t_stop to compute
+    RUL = t* - t_stop_current. _evaluate_fold() detects this capability
+    via hasattr(model, 'predict_with_time') and routes accordingly.
+    Regression models (NB, SVR, DT, RF, XGB) use model.predict(X) as before
+    — no changes to their interface or serialized .pkl files.
 
 Warning suppression:
     Statistical model warnings (statsmodels convergence, domain warnings)
@@ -111,17 +122,32 @@ def _evaluate_fold(
 ) -> dict[str, float]:
     """Evaluates a fitted model on validation fold using all four metrics.
 
+    Calls model.predict_with_time(X_val, t_stop_val) uniformly across all
+    model families. Regression models (NB, SVR, DT, RF, XGB) inherit the
+    default BaseRULModel implementation which delegates to predict(X) and
+    ignores t_stop. Survival models (CoxPHModel, WeibullAFTModel,
+    SurvivalTreeModel) override predict_with_time() to compute
+    RUL = t* - t_stop using the death curve F(t|X).
+
+    This uniform interface eliminates type-based branching and is fully
+    backward compatible with serialized regression model .pkl files —
+    they inherit the default predict_with_time() without requiring
+    re-training or re-serialization.
+
     Args:
         model: Fitted BaseRULModel instance.
         X_val: Validation feature matrix (n_windows, n_components).
         y_rul_val: True clipped RUL for validation windows.
-        t_stop_val: Last cycle of each validation window.
+        t_stop_val: Last cycle of each validation window. Passed to
+            predict_with_time() — used by survival models, ignored by
+            regression models via the default BaseRULModel implementation.
         evento_val: Event indicator for each validation window.
 
     Returns:
         Dictionary with keys S_score, C_index, MAE, RMSE.
     """
-    y_pred = model.predict(X_val)
+    y_pred = model.predict_with_time(X_val, t_stop_val)
+
     clipping = int(getattr(model, 'clipping_threshold', 125))
     results: dict[str, float] = {}
 
@@ -151,6 +177,10 @@ def _run_single_config(
         4. Calls transform on validation fold
         5. Instantiates and fits model with model_params
         6. Evaluates predictions with four metrics
+
+    For survival models, fit() receives t_stop and evento via kwargs.
+    For regression models, fit() receives only X and y_rul — kwargs
+    are accepted but silently ignored per the BaseRULModel contract.
 
     Args:
         params: Flat dict of all hyperparameters (pipeline + model).
@@ -184,7 +214,7 @@ def _run_single_config(
             )
 
             model = model_class(**model_params)
-            model.fit(X_tr, y_rul_tr)
+            model.fit(X_tr, y_rul_tr, t_stop=t_stop_tr, evento=evento_tr)
 
             fold_metrics.append(
                 _evaluate_fold(model, X_val, y_rul_val, t_stop_val, evento_val)
@@ -340,7 +370,7 @@ class GGSTrainingManager:
                   f"{len(pending_configs)} pending")
 
         # ------------------------------------------------------------------
-        # Sequential mode — config-level progress + fine-grained checkpoint
+        # Sequential mode
         # ------------------------------------------------------------------
         if n_jobs == 1:
             new_results: list[dict] = []
@@ -367,19 +397,7 @@ class GGSTrainingManager:
                     save_checkpoint(session, new_results)
 
         # ------------------------------------------------------------------
-        # Parallel mode — process-based (loky), checkpoint in main process
-        #
-        # IMPORTANT: prefer='threads' is intentionally NOT used here.
-        # sklearn.svm.SVR delegates to libsvm (C extension) which releases
-        # the GIL, allowing true concurrent C-level execution across threads.
-        # libsvm is NOT thread-safe for concurrent fit() calls — shared
-        # internal state causes memory corruption and immediate crashes.
-        #
-        # backend='loky' spawns isolated worker processes (separate memory
-        # spaces), making concurrent SVR fits safe. threading.Lock and shared
-        # lists are removed from the closure since workers have their own
-        # memory. Checkpointing is handled by the main process via the
-        # return_as='generator' streaming interface (joblib >= 1.3).
+        # Parallel mode
         # ------------------------------------------------------------------
         else:
             new_results = []
