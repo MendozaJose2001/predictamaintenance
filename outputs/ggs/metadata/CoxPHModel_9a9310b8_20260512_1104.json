@@ -1,0 +1,37 @@
+{
+  "model": "CoxPHModel",
+  "param_hash": "9a9310b8",
+  "timestamp": "20260512_1104",
+  "n_folds": 2,
+  "total_configs": 2,
+  "param_grid": {
+    "feature_set": [
+      "A",
+      "B"
+    ],
+    "window_size": [
+      20
+    ],
+    "n_components": [
+      10
+    ],
+    "clipping_threshold": [
+      115
+    ],
+    "baseline_estimation_method": [
+      "breslow"
+    ],
+    "n_baseline_knots": [
+      3
+    ],
+    "penalizer": [
+      0.0
+    ],
+    "l1_ratio": [
+      0.0
+    ],
+    "confidence_threshold": [
+      0.3
+    ]
+  }
+}
