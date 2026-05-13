@@ -1,9 +1,9 @@
 {
-  "model": "WeibullAFTModel",
-  "param_hash": "dd4bcf5e",
-  "timestamp": "20260512_1150",
+  "model": "CoxPHModel",
+  "param_hash": "59d4a8b5",
+  "timestamp": "20260512_1106",
   "n_folds": 5,
-  "total_configs": 5832,
+  "total_configs": 11664,
   "param_grid": {
     "feature_set": [
       "A",
@@ -26,10 +26,13 @@
       120,
       125
     ],
-    "confidence_threshold": [
-      0.3,
-      0.5,
-      0.95
+    "baseline_estimation_method": [
+      "breslow",
+      "spline"
+    ],
+    "n_baseline_knots": [
+      3,
+      5
     ],
     "penalizer": [
       0.0,
@@ -41,9 +44,10 @@
       0.5,
       1.0
     ],
-    "fit_intercept": [
-      true,
-      false
+    "confidence_threshold": [
+      0.3,
+      0.5,
+      0.95
     ]
   }
 }

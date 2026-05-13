@@ -90,7 +90,13 @@ class CoxFrailty(BaseRULModel, BaseEstimator, RegressorMixin):
     Args:
         distribution: Distribution of the frailty term. One of 'gamma',
             'gaussian', or 't'. Defaults to 'gamma'.
-        maxit: Maximum number of outer iterations for coxph. Defaults to 300.
+        maxit: Maximum number of outer iterations for coxph. Fixed at 50
+            based on Therneau's coxme default (iter.max=20) and empirical
+            evidence that the inner EM loop for θ fails structurally with
+            ~0.4% event rate regardless of iter.max — additional iterations
+            beyond 50 yield no statistical benefit on C-MAPSS FD001.
+            Not a GGS hyperparameter — controls the optimizer, not the model.
+            Defaults to 50.
         method: Estimation method for frailty variance θ. One of 'em' or
             'aic'. 'em' uses the EM algorithm (default for gamma and t).
             'aic' minimizes AIC to select θ. When method='em' is passed
@@ -119,7 +125,7 @@ class CoxFrailty(BaseRULModel, BaseEstimator, RegressorMixin):
     def __init__(
         self,
         distribution: str = 'gamma',
-        maxit: int = 300,
+        maxit: int = 50,
         method: str = 'em',
         tdf: int = 5,
         confidence_threshold: float = 0.5,

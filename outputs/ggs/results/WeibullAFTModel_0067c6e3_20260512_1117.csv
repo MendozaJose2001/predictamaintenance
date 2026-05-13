@@ -1,3 +1,0 @@
-feature_set,window_size,n_components,clipping_threshold,confidence_threshold,penalizer,l1_ratio,fit_intercept,mean_S_score,mean_C_index,mean_MAE,mean_RMSE
-A,20,10,115,0.3,0.0,0.0,True,,,,
-B,20,10,115,0.3,0.0,0.0,True,,,,
