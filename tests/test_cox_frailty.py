@@ -152,7 +152,7 @@ class TestInit:
     def test_default_params(self):
         model = CoxFrailty()
         assert model.distribution == 'gamma'
-        assert model.maxit == 300
+        assert model.maxit == 50
         assert model.method == 'em'
         assert model.tdf == 5
         assert model.confidence_threshold == 0.5

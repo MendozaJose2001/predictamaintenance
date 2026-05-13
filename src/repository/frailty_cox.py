@@ -1,5 +1,3 @@
-#src/repository/frailty_cox.py
-
 """R repository module for Cox proportional hazards with shared frailty.
 
 This module is the sole point of contact between Python and R for the
@@ -74,14 +72,45 @@ Prediction strategy:
 import os
 import tempfile
 import uuid
+import contextlib
+import io
 
 import numpy as np
 import pandas as pd
 import rpy2.robjects as ro
 from rpy2.robjects.packages import importr
+from rpy2.rinterface_lib import callbacks as r_callbacks
 
 # R packages — loaded once at import time
 _survival = importr('survival')
+
+
+@contextlib.contextmanager
+def _silence_r():
+    """Suppresses R console output (stdout and stderr/warnings).
+
+    rpy2 routes R's console output through two callbacks:
+        consolewrite_print   — R stdout (print, cat)
+        consolewrite_warnerror — R stderr (warnings, messages)
+
+    Both are redirected to /dev/null during the context. This silences
+    the 'Inner loop failed to converge' warnings from coxpenal.fit()
+    and the library path warnings from importr(), which are expected
+    and documented but clutter the GGS progress output.
+    """
+    _original_print    = r_callbacks.consolewrite_print
+    _original_warnerr  = r_callbacks.consolewrite_warnerror
+
+    def _devnull(s: str) -> None:
+        pass
+
+    r_callbacks.consolewrite_print      = _devnull
+    r_callbacks.consolewrite_warnerror  = _devnull
+    try:
+        yield
+    finally:
+        r_callbacks.consolewrite_print      = _original_print
+        r_callbacks.consolewrite_warnerror  = _original_warnerr
 
 
 def fit_cox_frailty(
@@ -143,13 +172,18 @@ def fit_cox_frailty(
     covariates = ' + '.join(feature_names)
     model_name = f'cox_frailty_{uuid.uuid4().hex}'
 
-    # frailty.gaussian does not accept 'em' — valid methods are
-    # "reml", "aic", "df", "fixed". Map 'em' → 'reml' for gaussian,
-    # consistent with R's default for that distribution.
-    # frailty.gamma and frailty.t accept 'em' natively.
-    effective_method = (
-        'reml' if (distribution == 'gaussian' and method == 'em') else method
-    )
+    # Method compatibility mapping per frailty distribution:
+    #   frailty.gamma:    accepts 'em', 'aic', 'df', 'fixed'  → no mapping needed
+    #   frailty.gaussian: accepts 'reml', 'aic', 'df', 'fixed' → map 'em' to 'reml'
+    #   frailty.t:        accepts 'aic', 'df', 'fixed'         → map 'em' to 'aic'
+    # Consistent with the project convention for conditionally active parameters
+    # (e.g. degree in SVR, n_baseline_knots in Cox PH).
+    if distribution == 'gaussian' and method == 'em':
+        effective_method = 'reml'
+    elif distribution == 't' and method == 'em':
+        effective_method = 'aic'
+    else:
+        effective_method = method
 
     ro.r(f'''
         {model_name} <- coxph(
