@@ -1,0 +1,34 @@
+{
+  "model": "CoxFrailty",
+  "param_hash": "9f5f596e",
+  "timestamp": "20260512_1809",
+  "n_folds": 2,
+  "total_configs": 2,
+  "param_grid": {
+    "feature_set": [
+      "A",
+      "B"
+    ],
+    "window_size": [
+      20
+    ],
+    "n_components": [
+      10
+    ],
+    "clipping_threshold": [
+      115
+    ],
+    "distribution": [
+      "gamma"
+    ],
+    "method": [
+      "em"
+    ],
+    "tdf": [
+      3
+    ],
+    "confidence_threshold": [
+      0.3
+    ]
+  }
+}

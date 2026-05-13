@@ -4,13 +4,14 @@ Trains a RUL estimation model using Group Grid Search with GroupKFold
 cross-validation over the C-MAPSS FD001 dataset.
 
 Usage:
-    python main.py --model nb     # NegativeBinomialPiecewise
-    python main.py --model svr    # SVRModel
-    python main.py --model dt     # DecisionTreeModel
-    python main.py --model rf     # RandomForestModel
-    python main.py --model xgb    # XGBModel
-    python main.py --model cox    # CoxPHModel
-    python main.py --model aft    # WeibullAFTModel
+    python main.py --model nb       # NegativeBinomialPiecewise
+    python main.py --model svr      # SVRModel
+    python main.py --model dt       # DecisionTreeModel
+    python main.py --model rf       # RandomForestModel
+    python main.py --model xgb      # XGBModel
+    python main.py --model cox      # CoxPHModel
+    python main.py --model aft      # WeibullAFTModel
+    python main.py --model frailty  # CoxFrailty (shared gamma/gaussian/t frailty)
 
 Results are saved automatically to outputs/ggs/results/.
 If a previous run was interrupted, the GGS resumes from the last checkpoint.
@@ -35,6 +36,7 @@ from src.models.random_forest import RandomForestModel
 from src.models.xgb_model import XGBModel
 from src.models.cox_ph import CoxPHModel
 from src.models.weibull_aft import WeibullAFTModel
+from src.models.cox_frailty import CoxFrailty
 
 
 # ---------------------------------------------------------------------------
@@ -127,14 +129,28 @@ _PARAM_GRID_AFT = {
     'fit_intercept':        [True, False],
 }
 
+_PARAM_GRID_COX_FRAILTY = {
+    # Pipeline
+    'feature_set':          ['A', 'B', 'C', 'D'],
+    'window_size':          [20, 25, 30],
+    'n_components':         [10, 15, 20],
+    'clipping_threshold':   [115, 120, 125],
+    # Model
+    'distribution':         ['gamma', 'gaussian', 't'],
+    'method':               ['em', 'aic'],
+    'tdf':                  [3, 5],
+    'confidence_threshold': [0.3, 0.5, 0.95],
+}
+
 _MODELS: dict = {
-    'nb':  (NegativeBinomialPiecewise, _PARAM_GRID_NB),
-    'svr': (SVRModel,                  _PARAM_GRID_SVR),
-    'dt':  (DecisionTreeModel,         _PARAM_GRID_DT),
-    'rf':  (RandomForestModel,         _PARAM_GRID_RF),
-    'xgb': (XGBModel,                  _PARAM_GRID_XGB),
-    'cox': (CoxPHModel,                _PARAM_GRID_COX),
-    'aft': (WeibullAFTModel,           _PARAM_GRID_AFT),
+    'nb':       (NegativeBinomialPiecewise, _PARAM_GRID_NB),
+    'svr':      (SVRModel,                  _PARAM_GRID_SVR),
+    'dt':       (DecisionTreeModel,         _PARAM_GRID_DT),
+    'rf':       (RandomForestModel,         _PARAM_GRID_RF),
+    'xgb':      (XGBModel,                  _PARAM_GRID_XGB),
+    'cox':      (CoxPHModel,                _PARAM_GRID_COX),
+    'aft':      (WeibullAFTModel,           _PARAM_GRID_AFT),
+    'frailty':  (CoxFrailty,               _PARAM_GRID_COX_FRAILTY),
 }
 
 
@@ -155,6 +171,7 @@ Examples:
   python main.py --model xgb --jobs 2
   python main.py --model cox --jobs 2
   python main.py --model aft --jobs 2
+  python main.py --model frailty --jobs 2
   python main.py --model nb --folds 3 --top 15
         """,
     )
@@ -162,7 +179,7 @@ Examples:
         '--model',
         choices=list(_MODELS.keys()),
         required=True,
-        help='Model to train: nb, svr, dt, rf, xgb, cox, aft',
+        help='Model to train: nb, svr, dt, rf, xgb, cox, aft, frailty',
     )
     parser.add_argument(
         '--folds',
