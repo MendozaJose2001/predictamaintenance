@@ -284,7 +284,4 @@ class DatasetManager:
             random_state=random_state
         )
 
-        print(f"Training engines: {len(unidades_train)}")
-        print(f"Test engines: {len(unidades_test)}")
-
         return unidades_train, unidades_test
