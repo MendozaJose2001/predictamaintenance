@@ -297,7 +297,7 @@ def test_trajectory(debug: bool = False) -> None:
     )
 
     print("=" * 65)
-    print("  SUBANÁLISIS 1 — Métricas globales | Test set completo")
+    print("  Full Trajectory Evaluation")
     print("=" * 65)
     print(df_metrics.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
     print()
@@ -328,13 +328,13 @@ def test_last_window(debug: bool = False) -> None:
         .reset_index(drop=True)
     )
 
-    print("=" * 65)
-    print("  SUBANÁLISIS 2 — Zona de riesgo | Última ventana por motor")
+    print("=" * 75)
+    print("  Risk Zone Evaluation")
     print("=" * 65)
     print(df_metrics.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
     print()
     print(f"  Motores evaluados: {len(m_test)}")
-    print("=" * 65)
+    print("=" * 75)
 
 
 def test_per_motor(debug: bool = False) -> PerMotorResult:
@@ -409,7 +409,7 @@ def test_per_motor(debug: bool = False) -> PerMotorResult:
     )
 
     print("=" * 75)
-    print("  SUBANÁLISIS 3 — Distribución del error por motor")
+    print("  Per-motor Metric Distributions")
     print("=" * 75)
     print(df_per_motor.to_string(
         index=False,

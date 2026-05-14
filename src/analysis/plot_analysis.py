@@ -18,6 +18,8 @@ Typical usage::
     plot_trayectorias_error()
 """
 
+import contextlib
+import os
 import numpy as np
 import pandas as pd
 from matplotlib.figure import Figure
@@ -154,7 +156,8 @@ def plot_per_motor_boxplots(debug: bool = False) -> None:
     Args:
         debug: Passed to get_trajectory_predict for verbose loading output.
     """
-    df_per_motor, ss_per_motor, ci_per_motor = test_per_motor(debug)
+    with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
+        df_per_motor, ss_per_motor, ci_per_motor = test_per_motor(debug)
 
     order     = df_per_motor['Modelo'].tolist()
     color_map = {
