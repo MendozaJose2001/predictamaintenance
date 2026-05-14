@@ -133,20 +133,21 @@ class CoxFrailty(BaseRULModel, BaseEstimator, RegressorMixin):
         confidence_threshold: float = 0.5,
         clipping_threshold: int = 125,
     ) -> None:
-        self.distribution = distribution
-        self.maxit = maxit
-        self.method = method
-        self.tdf = tdf
+        self.distribution         = distribution
+        self.maxit                = maxit
+        self.method               = method
+        self.tdf                  = tdf
         self.confidence_threshold = confidence_threshold
-        self.clipping_threshold = clipping_threshold
-        self.is_fitted_: bool = False
+        self.clipping_threshold   = clipping_threshold
+        self.is_fitted_: bool     = False
         self.model_name_: str | None = None
 
     def prepare_training_data(self, list_ids: np.ndarray) -> tuple:
         """Not implemented — this model uses the sliding window pipeline.
 
-        CoxFrailty is designed for the Nodo 2-4 pipeline. Call fit() directly
-        with the pipeline output, passing t_stop, evento and groups via kwargs.
+        CoxFrailty is designed for the sliding window pipeline. Call fit()
+        directly with the pipeline output, passing t_stop, evento and groups
+        via kwargs.
 
         Raises:
             NotImplementedError: Always.
@@ -178,7 +179,7 @@ class CoxFrailty(BaseRULModel, BaseEstimator, RegressorMixin):
 
         Args:
             X: Feature matrix of shape (n_windows, n_components). PCA-reduced
-                output from the sliding window pipeline (Nodo 4).
+                output from the dimensionality reduction stage.
             y: y_rul — accepted for API compatibility, not used in the fit.
             **kwargs:
                 t_stop (np.ndarray): Absolute cycle of each window. Required.
@@ -189,9 +190,9 @@ class CoxFrailty(BaseRULModel, BaseEstimator, RegressorMixin):
         Returns:
             Self.
         """
-        t_stop: np.ndarray | None  = kwargs.get('t_stop',  None)  # type: ignore
-        evento: np.ndarray | None  = kwargs.get('evento',  None)  # type: ignore
-        groups: np.ndarray | None  = kwargs.get('groups',  None)  # type: ignore
+        t_stop: np.ndarray | None = kwargs.get('t_stop', None)  # type: ignore
+        evento: np.ndarray | None = kwargs.get('evento', None)  # type: ignore
+        groups: np.ndarray | None = kwargs.get('groups', None)  # type: ignore
 
         if t_stop is None:
             warnings.warn(
@@ -203,14 +204,12 @@ class CoxFrailty(BaseRULModel, BaseEstimator, RegressorMixin):
             self.is_fitted_ = False
             return self
 
-        # Build feature column names from PCA output
-        n_features = X.shape[1]
+        n_features    = X.shape[1]
         feature_names = [f'PC_{i+1}' for i in range(n_features)]
 
-        # Build survival DataFrame — Andersen-Gill counting process format
-        df_surv = pd.DataFrame(X, columns=feature_names)
+        df_surv     = pd.DataFrame(X, columns=feature_names)
         t_stop_arr  = t_stop.astype(float)
-        t_start_arr = t_stop_arr - 1.0   # t_start = t_stop - 1 per window
+        t_start_arr = t_stop_arr - 1.0
 
         evento_arr = (
             evento.astype(int)
@@ -223,9 +222,8 @@ class CoxFrailty(BaseRULModel, BaseEstimator, RegressorMixin):
             else np.arange(len(t_stop_arr), dtype=int)
         )
 
-        # Remove rows with non-positive duration (R requires t_start < t_stop)
         valid_mask = t_stop_arr > 0
-        n_removed = int((~valid_mask).sum())
+        n_removed  = int((~valid_mask).sum())
         if n_removed > 0:
             warnings.warn(
                 f"Removed {n_removed} rows with t_stop <= 0.",
@@ -248,7 +246,6 @@ class CoxFrailty(BaseRULModel, BaseEstimator, RegressorMixin):
             return self
 
         try:
-            # Remove previous R model if it exists — avoid memory leaks
             if self.model_name_ is not None:
                 remove_model(self.model_name_)
                 self.model_name_ = None
@@ -275,7 +272,7 @@ class CoxFrailty(BaseRULModel, BaseEstimator, RegressorMixin):
                 RuntimeWarning,
                 stacklevel=2,
             )
-            self.is_fitted_ = False
+            self.is_fitted_  = False
             self.model_name_ = None
 
         return self
@@ -301,7 +298,7 @@ class CoxFrailty(BaseRULModel, BaseEstimator, RegressorMixin):
         if not self.is_fitted_ or self.model_name_ is None:
             return None
         try:
-            n_features = X.shape[1]
+            n_features    = X.shape[1]
             feature_names = [f'PC_{i+1}' for i in range(n_features)]
             X_df = pd.DataFrame(X, columns=feature_names)
             return predict_survival_functions(
@@ -349,8 +346,7 @@ class CoxFrailty(BaseRULModel, BaseEstimator, RegressorMixin):
 
         For each window, finds the first time t where F(t) >= confidence_threshold
         and computes RUL = t* - t_stop_current. If the threshold is never reached,
-        uses the maximum observed time as fallback — consistent with the documented
-        negative result behavior of CoxPHModel and WeibullAFTModel.
+        uses the maximum observed time as fallback.
 
         Args:
             survival_functions: List of (times, probs) from predict_survival_function.
@@ -363,18 +359,12 @@ class CoxFrailty(BaseRULModel, BaseEstimator, RegressorMixin):
 
         for i, (times, probs) in enumerate(survival_functions):
             failure_probs = 1.0 - probs
-            exceeds = np.where(failure_probs >= self.confidence_threshold)[0]
-
-            if len(exceeds) > 0:
-                t_failure = float(times[exceeds[0]])
-            else:
-                t_failure = float(times[-1])
-
-            rul = max(t_failure - float(t_stop[i]), 0.0)
+            exceeds       = np.where(failure_probs >= self.confidence_threshold)[0]
+            t_failure     = float(times[exceeds[0]]) if len(exceeds) > 0 else float(times[-1])
+            rul           = max(t_failure - float(t_stop[i]), 0.0)
             rul_list.append(rul)
 
-        raw_rul = np.array(rul_list)
-        return np.minimum(raw_rul, self.clipping_threshold)
+        return np.minimum(np.array(rul_list), self.clipping_threshold)
 
     def predict_with_time(
         self,
@@ -388,10 +378,6 @@ class CoxFrailty(BaseRULModel, BaseEstimator, RegressorMixin):
             2. Derive death curve F(t|X) = 1 - S(t|X)
             3. Find t* = first t where F(t*) >= confidence_threshold
             4. RUL = max(t* - t_stop_current, 0), clipped to clipping_threshold
-
-        This is the primary prediction method used by GGSTrainingManager
-        and RULProductionPredictor via the BaseRULModel.predict_with_time()
-        interface.
 
         Args:
             X: Feature matrix of shape (n_windows, n_components).
@@ -414,9 +400,7 @@ class CoxFrailty(BaseRULModel, BaseEstimator, RegressorMixin):
         """Fallback predict — not usable without t_stop.
 
         CoxFrailty requires t_stop to compute RUL = t* - t_stop_current.
-        Use predict_with_time(X, t_stop) instead. The BaseRULModel default
-        for predict_with_time() will call this method with t_stop ignored —
-        override ensures correct behavior when called via the uniform interface.
+        Use predict_with_time(X, t_stop) instead.
 
         Returns:
             NaN array of shape (n_windows,) with a RuntimeWarning.

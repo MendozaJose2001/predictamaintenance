@@ -1,12 +1,12 @@
 # ./src/models/negative_binomial.py
 
-"""Negative Binomial GLM for RUL estimation (new pipeline version).
+"""Negative Binomial GLM for RUL estimation.
 
 This module implements a Negative Binomial GLM as a BaseRULModel subclass
-compatible with the sliding window pipeline (Nodos 1-4). Unlike the original
+compatible with the sliding window pipeline. Unlike the original
 implementation, this version does not load per-motor CSVs — it receives the
-feature matrix directly from the GGS loop after DimReducer.transform() and
-flatten_windows().
+feature matrix directly from the GGS loop after the dimensionality reduction
+stage and flatten_windows().
 
 Model rationale:
     The Negative Binomial GLM is the primary model of this project because:
@@ -29,11 +29,6 @@ Confidence intervals:
     the parameter covariance matrix from MLE. The CI on the response
     scale is obtained by back-transforming the CI on the link scale.
     This is only available when alpha_reg=0 (standard MLE fit).
-
-prepare_training_data:
-    Not implemented — this model uses the sliding window pipeline
-    (Nodos 1-4). The GGS manager calls fit() directly with the output
-    of flatten_windows() after DimReducer.transform().
 """
 
 import warnings
@@ -53,8 +48,8 @@ class NegativeBinomialPiecewise(BaseRULModel, BaseEstimator, RegressorMixin):
     """Negative Binomial GLM for piecewise RUL estimation.
 
     Wraps a statsmodels Negative Binomial GLM as a sklearn-compatible
-    estimator. Receives PCA-reduced window features from the sliding
-    window pipeline (Nodo 4 output) and predicts clipped RUL.
+    estimator. Receives PCA-reduced window features from the dimensionality
+    reduction stage and predicts clipped RUL.
 
     The target is expected to be pre-clipped by the pipeline's
     clipping_threshold — no additional clipping is applied to y during
@@ -94,12 +89,12 @@ class NegativeBinomialPiecewise(BaseRULModel, BaseEstimator, RegressorMixin):
         l1_ratio: float = 0.5,
         link_type: str = 'log',
     ) -> None:
-        self.alpha = alpha
+        self.alpha              = alpha
         self.clipping_threshold = clipping_threshold
-        self.alpha_reg = alpha_reg
-        self.l1_ratio = l1_ratio
-        self.link_type = link_type
-        self.is_fitted_: bool = False
+        self.alpha_reg          = alpha_reg
+        self.l1_ratio           = l1_ratio
+        self.link_type          = link_type
+        self.is_fitted_: bool   = False
         self.model_stats_: GLMResultsWrapper | RegularizedResultsWrapper | None = None
 
     def _get_link(self) -> sm.families.links.Link:
@@ -123,17 +118,17 @@ class NegativeBinomialPiecewise(BaseRULModel, BaseEstimator, RegressorMixin):
     ) -> tuple:
         """Not implemented — this model uses the sliding window pipeline.
 
-        NegativeBinomialPiecewise is designed for the new Nodo 1-4 pipeline
+        NegativeBinomialPiecewise is designed for the sliding window pipeline
         and does not load per-motor CSVs. Call fit() directly with the output
-        of flatten_windows() after DimReducer.transform().
+        of flatten_windows() after the dimensionality reduction stage.
 
         Raises:
             NotImplementedError: Always.
         """
         raise NotImplementedError(
-            "NegativeBinomialPiecewise uses the sliding window pipeline "
-            "(Nodos 1-4). Call fit(X, y_rul) directly with the output of "
-            "flatten_windows() after DimReducer.transform(). "
+            "NegativeBinomialPiecewise uses the sliding window pipeline. "
+            "Call fit(X, y_rul) directly with the output of "
+            "flatten_windows() after the dimensionality reduction stage. "
             "y_rul must be the pre-clipped RUL array from flatten_windows()."
         )
 
@@ -160,7 +155,8 @@ class NegativeBinomialPiecewise(BaseRULModel, BaseEstimator, RegressorMixin):
 
         Args:
             X: Feature matrix of shape (n_windows, n_components).
-                Output of DimReducer.transform() after flatten_windows().
+                Output of the dimensionality reduction stage after
+                flatten_windows().
             y: Pre-clipped RUL array of shape (n_windows,).
                 y_rul from flatten_windows() — already clipped to
                 clipping_threshold by build_windows().
@@ -194,7 +190,7 @@ class NegativeBinomialPiecewise(BaseRULModel, BaseEstimator, RegressorMixin):
             self.is_fitted_ = True
 
         except Exception as e:
-            self.is_fitted_ = False
+            self.is_fitted_   = False
             self.model_stats_ = None
             warnings.warn(
                 f"Fit failed for link='{self.link_type}', "
@@ -224,11 +220,11 @@ class NegativeBinomialPiecewise(BaseRULModel, BaseEstimator, RegressorMixin):
         if not self.is_fitted_ or self.model_stats_ is None:
             return np.full(X.shape[0], np.nan)
 
-        X_arr = check_array(X)
+        X_arr        = check_array(X)
         X_with_const = sm.add_constant(X_arr, has_constant='add')
-        raw_predictions = self.model_stats_.predict(X_with_const)
+        raw          = self.model_stats_.predict(X_with_const)
 
-        return np.minimum(raw_predictions, self.clipping_threshold)
+        return np.minimum(raw, self.clipping_threshold)
 
     def predict_with_confidence(
         self,
@@ -275,26 +271,18 @@ class NegativeBinomialPiecewise(BaseRULModel, BaseEstimator, RegressorMixin):
 
         from scipy import stats as scipy_stats
 
-        X_arr = check_array(X)
+        X_arr        = check_array(X)
         X_with_const = sm.add_constant(X_arr, has_constant='add')
 
-        # Linear predictor for each observation
-        eta = X_with_const @ self.model_stats_.params
+        eta       = X_with_const @ self.model_stats_.params
+        cov_beta  = self.model_stats_.cov_params()
+        var_eta   = np.einsum('ij,jk,ik->i', X_with_const, cov_beta, X_with_const)
+        se_eta    = np.sqrt(np.maximum(var_eta, 0.0))
 
-        # Variance of linear predictor: diag(X @ Cov(beta) @ X^T)
-        cov_beta = self.model_stats_.cov_params()
-        var_eta = np.einsum('ij,jk,ik->i', X_with_const, cov_beta, X_with_const)
-        se_eta = np.sqrt(np.maximum(var_eta, 0.0))
-
-        # z critical value for the requested confidence level
-        z = scipy_stats.norm.ppf((1 + confidence) / 2)
-
-        # CI on link scale
+        z         = scipy_stats.norm.ppf((1 + confidence) / 2)
         eta_lower = eta - z * se_eta
         eta_upper = eta + z * se_eta
 
-        # Back-transform to response scale via inverse link.
-        # Use the fitted model's family link to avoid type inference issues.
         inv_link = self.model_stats_.family.link.inverse
 
         y_pred   = np.minimum(np.maximum(inv_link(eta),       0.0), self.clipping_threshold)

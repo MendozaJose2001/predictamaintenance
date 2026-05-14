@@ -1,6 +1,6 @@
 #./src/pipeline/rul_pipeline.py
 
-"""RUL pipeline orchestrator — Nodos 2 through 4.
+"""RUL pipeline orchestrator — windowing, feature extraction, and dimensionality reduction.
 
 This module implements RULPipeline, the single entry point for transforming
 raw multi-motor DataFrames into feature matrices ready for survival or
@@ -8,24 +8,24 @@ regression model training and prediction.
 
 The pipeline encapsulates three sequential transformation stages:
 
-    Nodo 2 — build_windows:
+    Windowing stage (build_windows):
         Sliding window construction. Produces MotorWindows with 3D
         feature tensors and counting process survival targets.
 
-    Nodo 3 — extract_window_features:
+    Feature extraction stage (extract_window_features):
         Numpy-native feature extraction over sliding windows.
         The feature set is controlled by the feature_set hyperparameter,
         enabling systematic evaluation of different feature combinations
         as part of the GGS.
 
-    Nodo 4 — DimReducer:
+    Dimensionality reduction stage (DimReducer):
         Internal RobustScaler (on extracted features) followed by PCA.
         Fitted on training data only to prevent leakage.
 
-Design decision — Nodo 1 (FeatureScaler) removed:
+Design decision — raw sensor scaling removed:
     Empirical verification showed that a RobustScaler on raw sensors before
     windowing is redundant when DimReducer already applies RobustScaler on
-    the extracted features before PCA. Without Nodo 1:
+    the extracted features before PCA. Without the raw sensor scaling stage:
     - No NaN or Inf in PCA output
     - Better variance distribution across PCA components (PC1=0.51 vs 0.70)
     - Simpler pipeline with one fewer stateful transformer
@@ -33,8 +33,9 @@ Design decision — Nodo 1 (FeatureScaler) removed:
 
 Feature set selection:
     feature_set is a GGS hyperparameter that controls which combination
-    of statistical features is extracted in Nodo 3. Valid values are the
-    keys of FEATURE_SETS in feature_extraction.py: 'A', 'B', 'C', 'D', 'E'.
+    of statistical features is extracted in the feature extraction stage.
+    Valid values are the keys of FEATURE_SETS in feature_extraction.py:
+    'A', 'B', 'C', 'D', 'E'.
 
     The feature sets were evaluated via the ratio-adjusted metric
     (autovalor promedio = cumvar × p / n_components) over 4 window sizes
@@ -50,7 +51,8 @@ Feature set selection:
     as criterion — the model decides which feature set produces better RUL
     predictions.
 
-Usage pattern in GGS loop:
+Usage pattern in GGS loop::
+
     # Training fold
     X_tr, y_rul_tr, t_stop_tr, evento_tr, groups_tr = (
         pipeline.fit_transform(X_df_train, y_df_train)
@@ -94,12 +96,13 @@ _VALID_FEATURE_SETS: frozenset[str] = frozenset(FEATURE_SETS.keys())
 
 
 class RULPipeline:
-    """Orchestrates Nodos 2-4 of the RUL feature engineering pipeline.
+    """Orchestrates the three feature engineering stages of the RUL pipeline.
 
     Transforms a multi-motor time-series DataFrame into a flat feature
     matrix ready for survival or regression model training. Encapsulates
-    build_windows (Nodo 2), extract_window_features (Nodo 3), and
-    DimReducer (Nodo 4).
+    the windowing stage (build_windows), the feature extraction stage
+    (extract_window_features), and the dimensionality reduction stage
+    (DimReducer).
 
     Only DimReducer is stateful — it is fitted on training data in
     fit_transform() and applied without refitting in transform(), preventing
@@ -113,9 +116,9 @@ class RULPipeline:
             Defaults to 125.
         n_components: Number of PCA components to retain.
             GGS hyperparameter. Defaults to 10.
-        feature_set: Key of the feature set to use in Nodo 3.
-            GGS hyperparameter. Must be one of: 'A', 'B', 'C', 'D', 'E'.
-            Defaults to 'B' (pipeline reference set).
+        feature_set: Key of the feature set to use in the feature
+            extraction stage. GGS hyperparameter. Must be one of:
+            'A', 'B', 'C', 'D', 'E'. Defaults to 'B' (pipeline reference).
             SET_E is available but computationally prohibitive for GGS.
         verbose: If True, prints timing for each pipeline stage.
             Defaults to False.
@@ -123,8 +126,8 @@ class RULPipeline:
     Attributes:
         reducer_: Fitted DimReducer. Available after fit_transform().
         is_fitted_: True after fit_transform() completes successfully.
-        features_: List of feature names used in Nodo 3. Available after
-            __init__ — does not require fit_transform().
+        features_: List of feature names used in the feature extraction
+            stage. Available after __init__ — does not require fit_transform().
     """
 
     def __init__(
@@ -140,21 +143,26 @@ class RULPipeline:
                 f"Invalid feature_set '{feature_set}'. "
                 f"Must be one of: {sorted(_VALID_FEATURE_SETS)}"
             )
-        self.window_size = window_size
-        self.clipping_threshold = clipping_threshold
-        self.n_components = n_components
-        self.feature_set = feature_set
-        self.verbose = verbose
-        self.is_fitted_: bool = False
+        self.window_size         = window_size
+        self.clipping_threshold  = clipping_threshold
+        self.n_components        = n_components
+        self.feature_set         = feature_set
+        self.verbose             = verbose
+        self.is_fitted_: bool    = False
         self.features_: list[str] = FEATURE_SETS[feature_set]
 
     def _log(self, message: str, elapsed: float) -> None:
-        """Prints a timing message when verbose=True."""
+        """Prints a timing message when verbose=True.
+
+        Args:
+            message: Stage description to print.
+            elapsed: Elapsed time in seconds.
+        """
         if self.verbose:
             print(f"  {message}: {elapsed:.2f}s")
 
     def _build_and_extract(self, X_df: pd.DataFrame) -> MotorWindows:
-        """Applies Nodos 2 and 3 to the input DataFrame.
+        """Applies windowing and feature extraction stages to the input DataFrame.
 
         Args:
             X_df: Input DataFrame with sensors/settings, unit_number,
@@ -169,7 +177,7 @@ class RULPipeline:
             window_size=self.window_size,
             clipping_threshold=self.clipping_threshold,
         )
-        self._log("Nodo 2 (windowing)", time.perf_counter() - t0)
+        self._log("Windowing", time.perf_counter() - t0)
 
         t0 = time.perf_counter()
         motor_features = extract_window_features(
@@ -177,7 +185,8 @@ class RULPipeline:
             features=self.features_,
         )
         self._log(
-            f"Nodo 3 (features={self.feature_set}, p={len(self.features_)*16})",
+            f"Feature extraction (set={self.feature_set}, "
+            f"p={len(self.features_) * 16})",
             time.perf_counter() - t0,
         )
 
@@ -205,7 +214,7 @@ class RULPipeline:
             return np.full(len(groups), np.nan)
 
         df_merge = pd.DataFrame({
-            'unit_number': groups,
+            'unit_number'   : groups,
             'time_in_cycles': t_stop.astype(int),
         })
         merged = df_merge.merge(
@@ -225,8 +234,9 @@ class RULPipeline:
     ) -> PipelineOutput:
         """Fits the pipeline on training data and returns transformed output.
 
-        Applies Nodos 2 and 3 (stateless) then fits and applies DimReducer
-        (Nodo 4) on training data to produce the flat feature matrix.
+        Applies the windowing and feature extraction stages (stateless),
+        then fits and applies the DimReducer (dimensionality reduction stage)
+        on training data to produce the flat feature matrix.
 
         Args:
             X_df: Training DataFrame without RUL column. Must contain
@@ -244,15 +254,15 @@ class RULPipeline:
                 evento:  (n_windows,) event indicator
                 groups:  (n_windows,) motor_id per window
         """
-        # Nodos 2 + 3 — stateless: windowing and feature extraction
+        # Windowing + feature extraction — stateless
         motor_features = self._build_and_extract(X_df)
 
-        # Nodo 4 — fit DimReducer on training features then transform
+        # Dimensionality reduction — fit on training data then transform
         t0 = time.perf_counter()
         self.reducer_: DimReducer = DimReducer(n_components=self.n_components)
         self.reducer_.fit(motor_features)
         motor_reduced = self.reducer_.transform(motor_features)
-        self._log("Nodo 4 (PCA)", time.perf_counter() - t0)
+        self._log("Dimensionality reduction (PCA)", time.perf_counter() - t0)
 
         self.is_fitted_ = True
 
@@ -269,8 +279,9 @@ class RULPipeline:
     ) -> PipelineOutput:
         """Transforms new data using the fitted DimReducer.
 
-        Applies Nodos 2 and 3 (stateless) then applies the DimReducer
-        fitted in fit_transform() without refitting.
+        Applies the windowing and feature extraction stages (stateless),
+        then applies the DimReducer fitted in fit_transform() without
+        refitting.
 
         Args:
             X_df: DataFrame without RUL column. Same structure as the
@@ -286,16 +297,17 @@ class RULPipeline:
         """
         if not self.is_fitted_:
             raise RuntimeError(
-                "RULPipeline is not fitted. Call fit_transform() before transform()."
+                "RULPipeline is not fitted. "
+                "Call fit_transform() before transform()."
             )
 
-        # Nodos 2 + 3 — stateless
+        # Windowing + feature extraction — stateless
         motor_features = self._build_and_extract(X_df)
 
-        # Nodo 4 — transform only (reducer already fitted)
+        # Dimensionality reduction — transform only (already fitted)
         t0 = time.perf_counter()
         motor_reduced = self.reducer_.transform(motor_features)
-        self._log("Nodo 4 (PCA)", time.perf_counter() - t0)
+        self._log("Dimensionality reduction (PCA)", time.perf_counter() - t0)
 
         # Flatten to 2D arrays
         X, t_start, t_stop, evento, _, groups = flatten_windows(motor_reduced)

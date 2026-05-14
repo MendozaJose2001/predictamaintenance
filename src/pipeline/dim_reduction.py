@@ -1,21 +1,22 @@
 #./src/pipeline/dim_reduction.py
 
-"""Dimensionality reduction for the RUL estimation pipeline (Nodo 4).
+"""Dimensionality reduction for the RUL estimation pipeline.
 
-This module implements PCA-based dimensionality reduction as the fourth
-transformation stage of the pipeline. The input is a MotorWindows dictionary
-with 2D feature matrices (n_windows, n_features) from Nodo 3. The output
+This module implements the dimensionality reduction stage of the pipeline.
+The input is a MotorWindows dictionary with 2D feature matrices
+(n_windows, n_features) from the feature extraction stage. The output
 preserves the same MotorWindows hierarchy with X_windows reduced to
 (n_windows, n_components).
 
 Design decisions:
     Internal RobustScaler before PCA:
-        Features extracted by Nodo 3 (median, abs_energy, slope, etc.) have
-        very different magnitudes. abs_energy = sum(x²) over window_size steps
-        produces values ~100x larger than other features like slope (~0.5).
-        Without scaling, PCA is biased toward high-magnitude features and
-        ignores subtle but informative ones. A RobustScaler is applied
-        internally before PCA to equalize feature contributions.
+        Features extracted by the feature extraction stage (median,
+        abs_energy, slope, etc.) have very different magnitudes.
+        abs_energy = sum(x²) over window_size steps produces values
+        ~100x larger than other features like slope (~0.5). Without
+        scaling, PCA is biased toward high-magnitude features and ignores
+        subtle but informative ones. A RobustScaler is applied internally
+        before PCA to equalize feature contributions.
         RobustScaler is preferred over StandardScaler because abs_energy
         and autocorrelation features can have heavy-tailed distributions.
         This scaler is fitted exclusively on training data (fit() call)
@@ -60,7 +61,7 @@ from src.pipeline.windowing import MotorData, MotorWindows
 
 
 class DimReducer(BaseEstimator):
-    """PCA-based dimensionality reducer for the RUL pipeline (Nodo 4).
+    """PCA-based dimensionality reducer for the RUL estimation pipeline.
 
     Applies RobustScaler followed by PCA on the concatenated feature
     matrices of all motors in the input MotorWindows. The RobustScaler
@@ -96,9 +97,10 @@ class DimReducer(BaseEstimator):
         features. Both transformers are stored for use in transform().
 
         Args:
-            motor_windows: MotorWindows from Nodo 3. Each motor entry must
-                have X_windows of shape (n_windows, n_features) — 2D, as
-                produced by extract_window_features.
+            motor_windows: MotorWindows from the feature extraction stage.
+                Each motor entry must have X_windows of shape
+                (n_windows, n_features) — 2D, as produced by
+                extract_window_features.
             y: Ignored. Present for sklearn API compatibility.
 
         Returns:
@@ -113,13 +115,14 @@ class DimReducer(BaseEstimator):
                 raise ValueError(
                     f"Motor {motor_id}: X_windows must be 2D "
                     f"(n_windows, n_features), got shape {data['X_windows'].shape}. "
-                    f"Nodo 3 must be applied before Nodo 4."
+                    f"The feature extraction stage must be applied before "
+                    f"dimensionality reduction."
                 )
 
         # Concatenate all motors for global fitting
         X_all = np.concatenate(
             [data['X_windows'] for data in motor_windows.values()],
-            axis=0
+            axis=0,
         )
 
         n_features = X_all.shape[1]
@@ -158,8 +161,9 @@ class DimReducer(BaseEstimator):
         feature_names is updated to PC names.
 
         Args:
-            motor_windows: MotorWindows from Nodo 3. Must contain the same
-                features as the MotorWindows used in fit().
+            motor_windows: MotorWindows from the feature extraction stage.
+                Must contain the same features as the MotorWindows used in
+                fit().
             y: Ignored. Present for sklearn API compatibility.
 
         Returns:
@@ -182,7 +186,7 @@ class DimReducer(BaseEstimator):
                 )
 
             # Apply scaler then PCA — same order as fit()
-            X_scaled = self.scaler_.transform(data['X_windows'])
+            X_scaled  = self.scaler_.transform(data['X_windows'])
             X_reduced = self.pca_.transform(X_scaled)
 
             result[motor_id] = MotorData(

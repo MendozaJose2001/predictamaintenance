@@ -2,9 +2,11 @@
 
 """Temporal feature extraction for the RUL estimation pipeline.
 
-This module implements Nodo 3 of the pipeline — transforming the 3D window
-tensor (n_windows, window_size, n_sensors) produced by Nodo 2 into a 2D
-feature matrix (n_windows, n_features_total) suitable for PCA in Nodo 4.
+This module implements the feature extraction stage of the pipeline —
+transforming the 3D window tensor (n_windows, window_size, n_sensors)
+produced by the windowing stage into a 2D feature matrix
+(n_windows, n_features_total) suitable for PCA in the dimensionality
+reduction stage.
 
 Feature extraction is implemented directly in numpy rather than tsfresh.
 Benchmarking showed that tsfresh overhead (DataFrame construction, internal
@@ -66,7 +68,7 @@ sensor degradation:
                                 Alomari et al. (2023) identify this as dominant
                                 in PC2 for speed and pressure sensors.
 
-Pre-defined feature set combinations for Fase 1 analysis:
+Pre-defined feature set combinations for feature set evaluation:
     SET_A: mean, std, rms, slope, rvalue                    (baseline minimal)
     SET_B: STATISTICAL_FEATURES + TREND_FEATURES            (pipeline reference)
     SET_C: SET_B + MEMORY_FEATURES                          (+memory)
@@ -112,8 +114,8 @@ COMPLEXITY_FEATURES: list[str] = [
     'permutation_entropy',
 ]
 
-# Legacy alias — all original features for backward compatibility
-# (includes partial_autocorr and abs_energy from original implementation)
+#: Legacy alias — all original features for backward compatibility.
+#: Includes partial_autocorr and abs_energy from original implementation.
 LEGACY_FEATURES: list[str] = [
     'median', 'abs_energy', 'q25', 'q75',
     'slope', 'rvalue',
@@ -121,7 +123,7 @@ LEGACY_FEATURES: list[str] = [
     'partial_autocorr_lag_1', 'partial_autocorr_lag_2', 'partial_autocorr_lag_3',
 ]
 
-# All new features combined
+#: All current features combined across all domains.
 ALL_FEATURES: list[str] = (
     STATISTICAL_FEATURES
     + TREND_FEATURES
@@ -131,7 +133,7 @@ ALL_FEATURES: list[str] = (
 )
 
 # ---------------------------------------------------------------------------
-# Pre-defined feature set candidates for Fase 1 analysis
+# Pre-defined feature set candidates for feature set evaluation
 # ---------------------------------------------------------------------------
 
 SET_A: list[str] = ['mean', 'std', 'rms', 'slope', 'rvalue']
@@ -202,10 +204,10 @@ def _compute_features(
         )
 
     # Time axis for trend computations
-    t = np.arange(window_size, dtype=float)
-    t_mean = t.mean()
+    t          = np.arange(window_size, dtype=float)
+    t_mean     = t.mean()
     t_centered = t - t_mean
-    t_var = np.sum(t_centered ** 2)
+    t_var      = np.sum(t_centered ** 2)
 
     feature_blocks: list[np.ndarray] = []
 
@@ -241,7 +243,7 @@ def _compute_features(
         # Trend features
         # ----------------------------------------------------------------
         elif feat == 'slope':
-            x_mean = X.mean(axis=1, keepdims=True)
+            x_mean     = X.mean(axis=1, keepdims=True)
             x_centered = X - x_mean
             cov = np.sum(
                 t_centered[:, np.newaxis] * x_centered, axis=1
@@ -249,10 +251,10 @@ def _compute_features(
             block = cov / (t_var / window_size)
 
         elif feat == 'rvalue':
-            x_mean = X.mean(axis=1, keepdims=True)
+            x_mean     = X.mean(axis=1, keepdims=True)
             x_centered = X - x_mean
-            x_std = X.std(axis=1)
-            t_std = t_centered.std()
+            x_std      = X.std(axis=1)
+            t_std      = t_centered.std()
             cov = np.sum(
                 t_centered[:, np.newaxis] * x_centered, axis=1
             ) / window_size
@@ -265,19 +267,19 @@ def _compute_features(
             if lag >= window_size:
                 block = np.zeros((n_windows, n_sensors))
             else:
-                x1 = X[:, :-lag, :]
-                x2 = X[:, lag:, :]
+                x1   = X[:, :-lag, :]
+                x2   = X[:, lag:, :]
                 x1_c = x1 - x1.mean(axis=1, keepdims=True)
                 x2_c = x2 - x2.mean(axis=1, keepdims=True)
-                n = window_size - lag
-                cov = np.sum(x1_c * x2_c, axis=1) / n
+                n    = window_size - lag
+                cov  = np.sum(x1_c * x2_c, axis=1) / n
                 denom = x1.std(axis=1) * x2.std(axis=1)
                 with np.errstate(invalid='ignore', divide='ignore'):
                     block = np.where(denom > 0, cov / denom, 0.0)
 
         elif feat.startswith('partial_autocorr_lag_'):
             # Legacy: Yule-Walker — O(n²) per window per sensor
-            lag = int(feat.split('_')[-1])
+            lag   = int(feat.split('_')[-1])
             block = np.zeros((n_windows, n_sensors))
             for s in range(n_sensors):
                 for w in range(n_windows):
@@ -316,43 +318,37 @@ def _compute_features(
             # d_t = sign(x_t - x_{t-1}), count runs of equal signs.
             # runs_ratio = n_runs / (window_size - 1)
             # Low → persistent direction; High → chaotic alternation.
-            diffs = np.diff(X, axis=1)          # (n_windows, ws-1, n_sensors)
-            signs = np.sign(diffs)
-            # Count sign changes (transitions between consecutive diffs)
-            changes = np.diff(signs, axis=1)    # (n_windows, ws-2, n_sensors)
-            n_changes = (changes != 0).sum(axis=1)  # (n_windows, n_sensors)
-            # n_runs = n_changes + 1 (at least one run always exists)
-            n_runs = n_changes + 1
-            block = n_runs / (window_size - 1)
+            diffs    = np.diff(X, axis=1)
+            signs    = np.sign(diffs)
+            changes  = np.diff(signs, axis=1)
+            n_changes = (changes != 0).sum(axis=1)
+            n_runs   = n_changes + 1
+            block    = n_runs / (window_size - 1)
 
         elif feat == 'hurst_rs':
             # Hurst exponent via simplified rescaled range R/S.
             # Series: cumulative deviations from mean.
-            # R = max(cumsum) - min(cumsum)
-            # S = std(x)
+            # R = max(cumsum) - min(cumsum); S = std(x)
             # H = log(R/S) / log(n)
             # H > 0.5 → persistent; H < 0.5 → antipersistent.
             x_mean = X.mean(axis=1, keepdims=True)
-            x_dev = X - x_mean                           # centered
-            cumsum = np.cumsum(x_dev, axis=1)            # cumulative sum
-            R = (cumsum.max(axis=1)
-                 - cumsum.min(axis=1))                   # range
-            S = X.std(axis=1)                            # std
+            x_dev  = X - x_mean
+            cumsum = np.cumsum(x_dev, axis=1)
+            R      = cumsum.max(axis=1) - cumsum.min(axis=1)
+            S      = X.std(axis=1)
             with np.errstate(invalid='ignore', divide='ignore'):
-                rs = np.where(S > 1e-10, R / S, 0.0)
+                rs    = np.where(S > 1e-10, R / S, 0.0)
                 block = np.where(
                     rs > 0,
                     np.log(rs) / np.log(window_size),
-                    0.0
+                    0.0,
                 )
 
         # ----------------------------------------------------------------
         # Frequency features
         # ----------------------------------------------------------------
         elif feat.startswith('fft_coef_'):
-            k = int(feat.split('_')[-1])
-            # Absolute value of k-th FFT coefficient over window axis
-            # rfft shape: (n_windows, window_size//2+1, n_sensors)
+            k        = int(feat.split('_')[-1])
             fft_vals = np.fft.rfft(X, axis=1)
             if k < fft_vals.shape[1]:
                 block = np.abs(fft_vals[:, k, :])
@@ -366,32 +362,27 @@ def _compute_features(
             # Shannon entropy of ordinal patterns — tau=1, dim=3.
             # PE = -sum(p(π) * log2(p(π))) for all ordinal patterns π.
             # O(n) per window per sensor — Python loop required.
-            dim = 3
+            dim   = 3
             block = np.zeros((n_windows, n_sensors))
             for s in range(n_sensors):
                 for w in range(n_windows):
                     series = X[w, :, s]
-                    n = window_size - dim + 1
+                    n      = window_size - dim + 1
                     if n <= 0:
                         continue
-                    # Build ordinal patterns
                     patterns: list[tuple] = []
                     for i in range(n):
                         sub = series[i:i + dim]
                         patterns.append(tuple(np.argsort(sub)))
-                    # Count frequencies
                     from collections import Counter
                     counts = Counter(patterns)
-                    total = sum(counts.values())
-                    probs = np.array(
+                    total  = sum(counts.values())
+                    probs  = np.array(
                         [v / total for v in counts.values()],
-                        dtype=float
+                        dtype=float,
                     )
-                    # Shannon entropy base 2
                     with np.errstate(divide='ignore'):
-                        block[w, s] = -np.sum(
-                            probs * np.log2(probs + 1e-12)
-                        )
+                        block[w, s] = -np.sum(probs * np.log2(probs + 1e-12))
 
         else:
             raise ValueError(f"Unhandled feature: {feat}")
@@ -440,8 +431,9 @@ def extract_window_features(
     All other fields (t_start, t_stop, evento, y_rul) are preserved unchanged.
 
     Args:
-        motor_windows: Output of build_windows (Nodo 2). Each motor entry
-            must have X_windows of shape (n_windows, window_size, n_sensors).
+        motor_windows: Output of build_windows (windowing stage). Each motor
+            entry must have X_windows of shape
+            (n_windows, window_size, n_sensors).
         features: List of feature names to compute. Defaults to SET_B
             (STATISTICAL_FEATURES + TREND_FEATURES — pipeline reference).
             Use FEATURE_SETS['A'..'E'] for candidate evaluation.
@@ -467,7 +459,8 @@ def extract_window_features(
             raise ValueError(
                 f"Motor {motor_id}: X_windows must be 3D "
                 f"(n_windows, window_size, n_sensors), "
-                f"got shape {X_windows.shape}."
+                f"got shape {X_windows.shape}. "
+                f"The windowing stage must be applied before feature extraction."
             )
 
         if not np.all(np.diff(data['t_stop']) >= 0):
@@ -476,9 +469,9 @@ def extract_window_features(
                 f"t_stop must be non-decreasing."
             )
 
-        sensor_names: list[str] = list(data['feature_names'])
-        X_features = _compute_features(X_windows, features)
-        new_feature_names = _build_feature_names(features, sensor_names)
+        sensor_names: list[str]  = list(data['feature_names'])
+        X_features               = _compute_features(X_windows, features)
+        new_feature_names        = _build_feature_names(features, sensor_names)
 
         result[motor_id] = MotorData(
             X_windows=X_features,

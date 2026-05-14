@@ -3,9 +3,9 @@
 """Support Vector Regression model for RUL estimation.
 
 This module implements an SVR model as a BaseRULModel subclass compatible
-with the sliding window pipeline (Nodos 1-4). It receives PCA-reduced
-window features directly from the GGS loop after DimReducer.transform()
-and flatten_windows().
+with the sliding window pipeline. It receives PCA-reduced window features
+directly from the GGS loop after the dimensionality reduction stage and
+flatten_windows().
 
 Model rationale:
     SVR is included in this project as a classical ML regressor to:
@@ -19,11 +19,6 @@ Confidence intervals:
     point estimates only. This is a known limitation documented in the
     project's methodological guidelines — SVR is evaluated on MAE/RMSE
     and S-Score only, without individual prediction uncertainty.
-
-prepare_training_data:
-    Not implemented — this model uses the sliding window pipeline
-    (Nodos 1-4). The GGS manager calls fit() directly with the output
-    of flatten_windows() after DimReducer.transform().
 """
 
 import warnings
@@ -41,8 +36,8 @@ class SVRModel(BaseRULModel, BaseEstimator, RegressorMixin):
     """Support Vector Regression for piecewise RUL estimation.
 
     Wraps sklearn's SVR as a BaseRULModel-compatible estimator.
-    Receives PCA-reduced window features from the sliding window
-    pipeline (Nodo 4 output) and predicts clipped RUL.
+    Receives PCA-reduced window features from the dimensionality
+    reduction stage and predicts clipped RUL.
 
     All hyperparameters are exposed for GGS optimization. The kernel
     parameter controls the feature space — RBF is recommended as the
@@ -81,13 +76,13 @@ class SVRModel(BaseRULModel, BaseEstimator, RegressorMixin):
         degree: int = 3,
         clipping_threshold: int = 125,
     ) -> None:
-        self.kernel = kernel
-        self.C = C
-        self.epsilon = epsilon
-        self.gamma = gamma
-        self.degree = degree
+        self.kernel             = kernel
+        self.C                  = C
+        self.epsilon            = epsilon
+        self.gamma              = gamma
+        self.degree             = degree
         self.clipping_threshold = clipping_threshold
-        self.is_fitted_: bool = False
+        self.is_fitted_: bool   = False
         self.model_: SVR | None = None
 
     def prepare_training_data(
@@ -96,17 +91,17 @@ class SVRModel(BaseRULModel, BaseEstimator, RegressorMixin):
     ) -> tuple:
         """Not implemented — this model uses the sliding window pipeline.
 
-        SVRModel is designed for the new Nodo 1-4 pipeline and does not
+        SVRModel is designed for the sliding window pipeline and does not
         load per-motor CSVs. Call fit() directly with the output of
-        flatten_windows() after DimReducer.transform().
+        flatten_windows() after the dimensionality reduction stage.
 
         Raises:
             NotImplementedError: Always.
         """
         raise NotImplementedError(
-            "SVRModel uses the sliding window pipeline (Nodos 1-4). "
+            "SVRModel uses the sliding window pipeline. "
             "Call fit(X, y_rul) directly with the output of "
-            "flatten_windows() after DimReducer.transform(). "
+            "flatten_windows() after the dimensionality reduction stage. "
             "y_rul must be the pre-clipped RUL array from flatten_windows()."
         )
 
@@ -127,7 +122,8 @@ class SVRModel(BaseRULModel, BaseEstimator, RegressorMixin):
 
         Args:
             X: Feature matrix of shape (n_windows, n_components).
-                Output of DimReducer.transform() after flatten_windows().
+                Output of the dimensionality reduction stage after
+                flatten_windows().
             y: Pre-clipped RUL array of shape (n_windows,).
                 y_rul from flatten_windows() — already clipped to
                 clipping_threshold by build_windows().
@@ -152,7 +148,7 @@ class SVRModel(BaseRULModel, BaseEstimator, RegressorMixin):
 
         except Exception as e:
             self.is_fitted_ = False
-            self.model_ = None
+            self.model_     = None
             warnings.warn(
                 f"Fit failed for kernel='{self.kernel}', C={self.C}, "
                 f"epsilon={self.epsilon}: {type(e).__name__}: {e}",
@@ -181,6 +177,6 @@ class SVRModel(BaseRULModel, BaseEstimator, RegressorMixin):
             return np.full(X.shape[0], np.nan)
 
         X_arr = check_array(X)
-        raw_predictions = self.model_.predict(X_arr)
+        raw   = self.model_.predict(X_arr)
 
-        return np.clip(raw_predictions, 0.0, self.clipping_threshold)
+        return np.clip(raw, 0.0, self.clipping_threshold)

@@ -2,11 +2,11 @@
 
 """Sliding window construction for the RUL estimation pipeline.
 
-This module implements Nodo 2 of the pipeline — transforming a flat
-time-series DataFrame into a dictionary of sliding windows per motor.
+This module implements the windowing stage of the pipeline — transforming
+a flat time-series DataFrame into a dictionary of sliding windows per motor.
 Each window captures the degradation history of a motor over the last
 window_size cycles, enabling temporal feature extraction in subsequent
-nodes (tsfresh, PCA).
+stages (feature extraction, dimensionality reduction).
 
 Design decisions:
     Input flexibility:
@@ -154,8 +154,8 @@ def build_windows(
     if window_size < 1:
         raise ValueError(f"window_size must be >= 1, got {window_size}")
 
-    # Determine feature columns — everything except metadata
-    # RUL and evento are separated by the GGS before reaching this function
+    # Determine feature columns — everything except metadata.
+    # RUL is separated by the GGS before reaching this function.
     meta_cols = {unit_col, time_col, rul_col, evento_col}
     feature_cols = [c for c in df.columns if c not in meta_cols]
 
@@ -173,9 +173,7 @@ def build_windows(
         # Validate that time_in_cycles starts at >= 1 so that
         # t_start = time_in_cycles - 1 is never negative. Cox and AFT models
         # require a shared absolute time axis across motors — normalizing each
-        # motor independently would distort the baseline hazard estimate. If
-        # motors have been filtered and cycles no longer start at 1, the
-        # caller must re-index cycles before passing df to build_windows.
+        # motor independently would distort the baseline hazard estimate.
         first_cycle = float(motor_df[time_col].iloc[0])
         if first_cycle < 1:
             raise ValueError(
@@ -193,31 +191,30 @@ def build_windows(
             )
 
         feature_vals = motor_df[feature_cols].to_numpy(dtype=float)
-        time_vals = motor_df[time_col].to_numpy(dtype=float)
+        time_vals    = motor_df[time_col].to_numpy(dtype=float)
 
         # RUL and evento are optional — absent when pipeline receives
-        # pre-separated X_df from the GGS (no RUL/evento columns)
-        has_rul = rul_col in motor_df.columns
+        # pre-separated X_df from the GGS (no RUL/evento columns).
+        has_rul    = rul_col in motor_df.columns
         has_evento = evento_col in motor_df.columns
-        rul_vals = motor_df[rul_col].to_numpy(dtype=float) if has_rul else None
+        rul_vals    = motor_df[rul_col].to_numpy(dtype=float) if has_rul else None
         evento_vals = motor_df[evento_col].to_numpy(dtype=int) if has_evento else None
 
-        # Number of complete windows for this motor
-        n_windows = n_cycles - window_size + 1
+        n_windows  = n_cycles - window_size + 1
 
-        X_windows = np.empty((n_windows, window_size, len(feature_cols)), dtype=float)
-        t_start = np.empty(n_windows, dtype=float)
-        t_stop = np.empty(n_windows, dtype=float)
-        evento_out = np.zeros(n_windows, dtype=int)
-        y_rul = np.full(n_windows, np.nan, dtype=float)
+        X_windows   = np.empty((n_windows, window_size, len(feature_cols)), dtype=float)
+        t_start     = np.empty(n_windows, dtype=float)
+        t_stop      = np.empty(n_windows, dtype=float)
+        evento_out  = np.zeros(n_windows, dtype=int)
+        y_rul       = np.full(n_windows, np.nan, dtype=float)
 
         for i in range(n_windows):
             window_slice = slice(i, i + window_size)
-            last_idx = i + window_size - 1
+            last_idx     = i + window_size - 1
 
             X_windows[i] = feature_vals[window_slice]
-            t_start[i] = time_vals[i] - 1.0
-            t_stop[i] = time_vals[last_idx]
+            t_start[i]   = time_vals[i] - 1.0
+            t_stop[i]    = time_vals[last_idx]
 
             if evento_vals is not None:
                 evento_out[i] = evento_vals[last_idx]
@@ -253,12 +250,12 @@ def flatten_windows(
     Returns:
         Tuple of (X_windows, t_start, t_stop, evento, y_rul, groups) where:
             X_windows: np.ndarray of shape (total_windows, window_size, n_features).
-            t_start: np.ndarray of shape (total_windows,).
-            t_stop: np.ndarray of shape (total_windows,).
-            evento: np.ndarray of shape (total_windows,).
-            y_rul: np.ndarray of shape (total_windows,).
-            groups: np.ndarray of shape (total_windows,) with motor_id
-                repeated for each window of that motor.
+            t_start:   np.ndarray of shape (total_windows,).
+            t_stop:    np.ndarray of shape (total_windows,).
+            evento:    np.ndarray of shape (total_windows,).
+            y_rul:     np.ndarray of shape (total_windows,).
+            groups:    np.ndarray of shape (total_windows,) with motor_id
+                       repeated for each window of that motor.
     """
     X_list, ts_list, te_list, ev_list, rul_list, grp_list = [], [], [], [], [], []
 

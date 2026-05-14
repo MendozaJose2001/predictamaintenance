@@ -3,7 +3,7 @@
 """XGBoost Regressor model for RUL estimation.
 
 This module implements XGBModel as a BaseRULModel subclass compatible
-with the sliding window pipeline (Nodos 2-4). It receives PCA-reduced
+with the sliding window pipeline. It receives PCA-reduced
 window features directly from the GGS loop and predicts clipped RUL
 as a point estimate.
 
@@ -51,7 +51,7 @@ class XGBModel(BaseRULModel, BaseEstimator, RegressorMixin):
 
     Wraps xgboost.XGBRegressor as a BaseRULModel-compatible estimator.
     Receives PCA-reduced window features from the sliding window pipeline
-    (Nodo 4 output) and predicts clipped RUL.
+    (dimensionality reduction stage output) and predicts clipped RUL.
 
     All GGS-relevant hyperparameters are exposed as constructor arguments.
     Internal parameters (objective, tree_method, n_jobs, random_state)
@@ -118,7 +118,7 @@ class XGBModel(BaseRULModel, BaseEstimator, RegressorMixin):
             NotImplementedError: Always.
         """
         raise NotImplementedError(
-            "XGBModel uses the sliding window pipeline (Nodos 2-4). "
+            "XGBModel uses the sliding window pipeline. "
             "Call fit(X, y_rul) directly with the pipeline output."
         )
 

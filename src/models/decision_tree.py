@@ -3,9 +3,9 @@
 """Decision Tree Regressor model for RUL estimation.
 
 This module implements a DecisionTreeModel as a BaseRULModel subclass
-compatible with the sliding window pipeline (Nodos 2-4). It receives
-PCA-reduced window features directly from the GGS loop and predicts
-clipped RUL as a point estimate.
+compatible with the sliding window pipeline. It receives PCA-reduced
+window features directly from the GGS loop and predicts clipped RUL
+as a point estimate.
 
 Model rationale:
     Decision Tree is included as a classical ML regressor to:
@@ -33,7 +33,7 @@ from sklearn.utils.validation import check_array
 from src.models.base_model import BaseRULModel
 
 
-# Tipo propio para max_features — coincide exactamente con sklearn
+# Custom type for max_features — matches sklearn exactly
 MaxFeatures = float | Literal['sqrt', 'log2'] | None
 
 
@@ -41,8 +41,8 @@ class DecisionTreeModel(BaseRULModel, BaseEstimator, RegressorMixin):
     """Decision Tree Regressor for RUL estimation.
 
     Wraps sklearn's DecisionTreeRegressor as a BaseRULModel-compatible
-    estimator. Receives PCA-reduced window features from the sliding
-    window pipeline (Nodo 4 output) and predicts clipped RUL.
+    estimator. Receives PCA-reduced window features from the dimensionality
+    reduction stage and predicts clipped RUL.
 
     All sklearn hyperparameters are exposed for GGS optimization.
 
@@ -74,12 +74,12 @@ class DecisionTreeModel(BaseRULModel, BaseEstimator, RegressorMixin):
         max_features: MaxFeatures = None,
         clipping_threshold: int = 125,
     ) -> None:
-        self.max_depth = max_depth
+        self.max_depth         = max_depth
         self.min_samples_split = min_samples_split
-        self.min_samples_leaf = min_samples_leaf
+        self.min_samples_leaf  = min_samples_leaf
         self.max_features: MaxFeatures = max_features
         self.clipping_threshold = clipping_threshold
-        self.is_fitted_: bool = False
+        self.is_fitted_: bool   = False
         self.model_: DecisionTreeRegressor | None = None
 
     def prepare_training_data(self, list_ids: np.ndarray) -> tuple:
@@ -89,7 +89,7 @@ class DecisionTreeModel(BaseRULModel, BaseEstimator, RegressorMixin):
             NotImplementedError: Always.
         """
         raise NotImplementedError(
-            "DecisionTreeModel uses the sliding window pipeline (Nodos 2-4). "
+            "DecisionTreeModel uses the sliding window pipeline. "
             "Call fit(X, y_rul) directly with the pipeline output."
         )
 
@@ -125,7 +125,7 @@ class DecisionTreeModel(BaseRULModel, BaseEstimator, RegressorMixin):
 
         except Exception as e:
             self.is_fitted_ = False
-            self.model_ = None
+            self.model_     = None
             warnings.warn(
                 f"Fit failed for DecisionTreeModel: {type(e).__name__}: {e}",
                 RuntimeWarning,
@@ -148,5 +148,5 @@ class DecisionTreeModel(BaseRULModel, BaseEstimator, RegressorMixin):
             return np.full(X.shape[0], np.nan)
 
         X_arr = check_array(X)
-        raw = self.model_.predict(X_arr)
+        raw   = self.model_.predict(X_arr)
         return np.clip(raw, 0.0, float(self.clipping_threshold))

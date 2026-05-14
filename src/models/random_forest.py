@@ -3,9 +3,9 @@
 """Random Forest Regressor model for RUL estimation.
 
 This module implements a RandomForestModel as a BaseRULModel subclass
-compatible with the sliding window pipeline (Nodos 2-4). It receives
-PCA-reduced window features directly from the GGS loop and predicts
-clipped RUL as a point estimate.
+compatible with the sliding window pipeline. It receives PCA-reduced
+window features directly from the GGS loop and predicts clipped RUL
+as a point estimate.
 
 Model rationale:
     Random Forest is included as an ensemble extension of DecisionTreeModel:
@@ -32,7 +32,7 @@ from sklearn.utils.validation import check_array
 from src.models.base_model import BaseRULModel
 
 
-# Tipo propio para max_features — RandomForestRegressor no acepta None
+# Custom type for max_features — RandomForestRegressor does not accept None
 MaxFeatures = float | Literal['sqrt', 'log2']
 
 
@@ -40,8 +40,8 @@ class RandomForestModel(BaseRULModel, BaseEstimator, RegressorMixin):
     """Random Forest Regressor for RUL estimation.
 
     Wraps sklearn's RandomForestRegressor as a BaseRULModel-compatible
-    estimator. Receives PCA-reduced window features from the sliding
-    window pipeline (Nodo 4 output) and predicts clipped RUL.
+    estimator. Receives PCA-reduced window features from the dimensionality
+    reduction stage and predicts clipped RUL.
 
     All sklearn hyperparameters are exposed for GGS optimization.
 
@@ -74,13 +74,13 @@ class RandomForestModel(BaseRULModel, BaseEstimator, RegressorMixin):
         max_features: MaxFeatures = 1.0,
         clipping_threshold: int = 125,
     ) -> None:
-        self.n_estimators = n_estimators
-        self.max_depth = max_depth
+        self.n_estimators      = n_estimators
+        self.max_depth         = max_depth
         self.min_samples_split = min_samples_split
-        self.min_samples_leaf = min_samples_leaf
+        self.min_samples_leaf  = min_samples_leaf
         self.max_features: MaxFeatures = max_features
         self.clipping_threshold = clipping_threshold
-        self.is_fitted_: bool = False
+        self.is_fitted_: bool   = False
         self.model_: RandomForestRegressor | None = None
 
     def prepare_training_data(self, list_ids: np.ndarray) -> tuple:
@@ -90,7 +90,7 @@ class RandomForestModel(BaseRULModel, BaseEstimator, RegressorMixin):
             NotImplementedError: Always.
         """
         raise NotImplementedError(
-            "RandomForestModel uses the sliding window pipeline (Nodos 2-4). "
+            "RandomForestModel uses the sliding window pipeline. "
             "Call fit(X, y_rul) directly with the pipeline output."
         )
 
@@ -121,14 +121,14 @@ class RandomForestModel(BaseRULModel, BaseEstimator, RegressorMixin):
                 min_samples_leaf=self.min_samples_leaf,
                 max_features=self.max_features,
                 random_state=42,
-                n_jobs=1,  # GGS maneja el paralelismo externamente
+                n_jobs=1,  # GGS manages parallelism externally
             )
             self.model_.fit(X_arr, y_arr)
             self.is_fitted_ = True
 
         except Exception as e:
             self.is_fitted_ = False
-            self.model_ = None
+            self.model_     = None
             warnings.warn(
                 f"Fit failed for RandomForestModel: {type(e).__name__}: {e}",
                 RuntimeWarning,
@@ -151,5 +151,5 @@ class RandomForestModel(BaseRULModel, BaseEstimator, RegressorMixin):
             return np.full(X.shape[0], np.nan)
 
         X_arr = check_array(X)
-        raw = self.model_.predict(X_arr)
+        raw   = self.model_.predict(X_arr)
         return np.clip(raw, 0.0, float(self.clipping_threshold))
