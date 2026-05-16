@@ -1,3 +1,5 @@
+#./src/analysis/test_analysis.py
+
 """Test set analysis functions for PredictaMaintenance.
 
 Provides data loading, prediction generation, and metric computation
@@ -128,9 +130,9 @@ def get_test_motors(debug: bool = True) -> tuple[pd.DataFrame, list[int]]:
     df_test = pd.concat(dfs, ignore_index=True)
 
     if debug:
-        print(f"Motores de test: {df_test['unit_number'].nunique()}")
-        print(f"Total filas:     {len(df_test)}")
-        print(f"Eventos:         {df_test['evento'].sum()}")
+        print(f"Test motors: {df_test['unit_number'].nunique()}")
+        print(f"Total rows:  {len(df_test)}")
+        print(f"Events:      {df_test['evento'].sum()}")
 
     return df_test, m_test
 
@@ -195,7 +197,7 @@ def get_trajectory_predict(
         if debug:
             print(
                 f"[OK] {MODEL_NAMES[key]:20s} — "
-                f"{len(results[key]['y_pred'])} ventanas"
+                f"{len(results[key]['y_pred'])} windows"
             )
 
     return results, predictors, m_test
@@ -237,8 +239,8 @@ def get_last_window_predict(
     if debug:
         key0 = list(results_last.keys())[0]
         print(
-            f"Ventanas extraídas por modelo: "
-            f"{len(results_last[key0]['y_pred'])} (una por motor)"
+            f"Windows extracted per model: "
+            f"{len(results_last[key0]['y_pred'])} (one per motor)"
         )
 
     return results_last, predictors, m_test
@@ -275,7 +277,7 @@ def _build_metrics_row(
 
 
 def test_trajectory(debug: bool = False) -> None:
-    """Prints the metric table for Subanálisis 1 — full trajectory evaluation.
+    """Prints the metric table for subanalysis 1 — full trajectory evaluation.
 
     Evaluates all eligible models over the complete set of sliding windows
     from the 60 test motors. S-Score and C-Index are the primary metrics;
@@ -297,17 +299,17 @@ def test_trajectory(debug: bool = False) -> None:
     )
 
     print("=" * 65)
-    print("  Full Trajectory Evaluation")
+    print("  SUBANÁLISIS 1 — Métricas globales | Test set completo")
     print("=" * 65)
     print(df_metrics.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
     print()
-    print(f"  Ventanas totales evaluadas: {len(results['nb']['y_pred'])}")
-    print(f"  Motores de test:            {len(m_test)}")
+    print(f"  Total windows evaluated: {len(results['nb']['y_pred'])}")
+    print(f"  Test motors:             {len(m_test)}")
     print("=" * 65)
 
 
 def test_last_window(debug: bool = False) -> None:
-    """Prints the metric table for Subanálisis 2 — risk zone evaluation.
+    """Prints the metric table for subanalysis 2 — risk zone evaluation.
 
     Evaluates all eligible models using only the last sliding window per
     motor (N=60). This reflects the maintenance decision point where the
@@ -328,17 +330,17 @@ def test_last_window(debug: bool = False) -> None:
         .reset_index(drop=True)
     )
 
-    print("=" * 75)
-    print("  Risk Zone Evaluation")
+    print("=" * 65)
+    print("  Risk Zone Evaluation — Last Window per Motor")
     print("=" * 65)
     print(df_metrics.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
     print()
-    print(f"  Motores evaluados: {len(m_test)}")
-    print("=" * 75)
+    print(f"  Motors evaluated: {len(m_test)}")
+    print("=" * 65)
 
 
 def test_per_motor(debug: bool = False) -> PerMotorResult:
-    """Computes per-motor metric distributions for Subanálisis 3.
+    """Computes per-motor metric distributions for subanalysis 3.
 
     Calculates S-Score and C-Index for each of the 60 test motors
     independently, then reports median, IQR, and maximum across motors.
@@ -409,17 +411,17 @@ def test_per_motor(debug: bool = False) -> PerMotorResult:
     )
 
     print("=" * 75)
-    print("  Per-motor Metric Distributions")
+    print("  Per-motor Error Distribution")
     print("=" * 75)
     print(df_per_motor.to_string(
         index=False,
         float_format=lambda x: f"{x:.4f}",
     ))
     print()
-    print("  S-Score med: mediana sobre 60 motores (↓ mejor)")
-    print("  S-Score IQR: varianza entre motores   (↓ más consistente)")
-    print("  S-Score max: peor motor individual    (↓ menos picos)")
-    print("  C-Index med: ranking medio            (↑ mejor)")
+    print("  S-Score med: median over 60 motors  (↓ better)")
+    print("  S-Score IQR: inter-motor variance   (↓ more consistent)")
+    print("  S-Score max: worst individual motor (↓ fewer spikes)")
+    print("  C-Index med: mean ranking quality   (↑ better)")
     print("=" * 75)
 
     return df_per_motor, ss_per_motor, ci_per_motor

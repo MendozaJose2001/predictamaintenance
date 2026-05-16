@@ -1,3 +1,5 @@
+#./src/utils/production_predictor.py
+
 """Frozen Estimator for production RUL inference.
 
 This module implements RULProductionPredictor — an immutable object that
@@ -53,17 +55,18 @@ Design decisions:
         Unlike BaseRULModel.predict() which receives PCA-reduced arrays,
         this predict() receives the raw sensor DataFrame — exactly what
         arrives in production. The internal pipeline.transform() handles
-        the full Nodo2→Nodo3→Nodo4 transformation.
+        the full windowing → feature extraction → dimensionality reduction
+        transformation.
 
     Uniform prediction interface via predict_with_time():
         All models are called via model.predict_with_time(X, t_stop) —
         the uniform interface defined in BaseRULModel. Regression models
         (NB, SVR, DT, RF, XGB) inherit the BaseRULModel default which
         delegates to predict(X) and ignores t_stop. Survival models
-        (CoxPHModel, WeibullAFTModel, SurvivalTreeModel) override
-        predict_with_time() to compute RUL = t* - t_stop using the death
-        curve F(t|X). t_stop is extracted directly from pipeline.transform()
-        — no additional computation required.
+        (CoxPHModel, WeibullAFTModel) override predict_with_time() to
+        compute RUL = t* - t_stop using the death curve F(t|X). t_stop
+        is extracted directly from pipeline.transform() — no additional
+        computation required.
 
         This design preserves the interface of regression models already
         serialized in .pkl files — they inherit predict_with_time() from
@@ -159,7 +162,6 @@ class RULProductionPredictor(BaseEstimator, RegressorMixin):
         ValueError: If model.is_fitted_ is False.
 
     Example:
-        >>> # Recommended construction — via from_config
         >>> predictor = RULProductionPredictor.from_config(
         ...     model_class=NegativeBinomialPiecewise,
         ...     params={
@@ -170,9 +172,7 @@ class RULProductionPredictor(BaseEstimator, RegressorMixin):
         ...     X_df=X_df,
         ...     y_df=y_df,
         ... )
-        >>> # Standard prediction — last window
-        >>> rul_now = predictor.predict(df_motor)
-        >>> # Full degradation trajectory
+        >>> rul_now  = predictor.predict(df_motor)
         >>> rul_traj = predictor.predict(df_motor, return_mode='all')
     """
 
@@ -182,7 +182,6 @@ class RULProductionPredictor(BaseEstimator, RegressorMixin):
         model: BaseRULModel,
         model_name: str | None = None,
     ) -> None:
-        # Validate that pipeline and model are trained before storing
         if not getattr(pipeline, 'is_fitted_', False):
             raise ValueError(
                 "The provided pipeline is not trained (is_fitted_=False). "
@@ -206,9 +205,9 @@ class RULProductionPredictor(BaseEstimator, RegressorMixin):
         self.clipping_threshold: int = pipeline.clipping_threshold
 
         # Post-construction attributes — sklearn trailing underscore convention
-        self.pipeline_: RULPipeline  = pipeline
-        self.model_: BaseRULModel    = model
-        self.model_name_: str        = (
+        self.pipeline_: RULPipeline = pipeline
+        self.model_: BaseRULModel   = model
+        self.model_name_: str       = (
             model_name
             if model_name is not None
             else model.__class__.__name__
@@ -217,9 +216,6 @@ class RULProductionPredictor(BaseEstimator, RegressorMixin):
     @staticmethod
     def _load_training_data() -> tuple[pd.DataFrame, pd.DataFrame]:
         """Loads the full training partition from DatasetManager.
-
-        Reads the 140 training motors from data/clean/ and assembles
-        X_df and y_df ready for pipeline.fit_transform().
 
         Returns:
             Tuple of (X_df, y_df) where:
@@ -237,9 +233,8 @@ class RULProductionPredictor(BaseEstimator, RegressorMixin):
             dfs.append(df)
 
         df_all = pd.concat(dfs, ignore_index=True)
-        X_df = df_all.drop(columns=['RUL'])
-        y_df = df_all[['unit_number', 'time_in_cycles', 'RUL']].copy()
-
+        X_df   = df_all.drop(columns=['RUL'])
+        y_df   = df_all[['unit_number', 'time_in_cycles', 'RUL']].copy()
         return X_df, y_df
 
     @classmethod
@@ -265,9 +260,9 @@ class RULProductionPredictor(BaseEstimator, RegressorMixin):
         If X_df and y_df are not provided, training data is loaded
         automatically from DatasetManager (140 C-MAPSS FD001 train motors).
 
-        For survival models (CoxPHModel, WeibullAFTModel, SurvivalTreeModel),
-        fit() receives t_stop and evento extracted from the pipeline — required
-        to build the survival target. For regression models, these kwargs are
+        For survival models (CoxPHModel, WeibullAFTModel), fit() receives
+        t_stop and evento extracted from the pipeline — required to build
+        the survival target. For regression models, these kwargs are
         silently ignored per the BaseRULModel contract.
 
         Args:
@@ -293,23 +288,16 @@ class RULProductionPredictor(BaseEstimator, RegressorMixin):
 
         pipeline_params, model_params = _split_params(params)
 
-        # Build and train pipeline on full training data
         pipeline = RULPipeline(**pipeline_params)
         X, y_rul, t_stop, evento, groups = pipeline.fit_transform(X_df, y_df)
 
-        # Build and train model — t_stop and evento passed via kwargs for
-        # survival models; silently ignored by regression models
         model = model_class(
             **model_params,
             clipping_threshold=pipeline_params['clipping_threshold'],
         )
         model.fit(X, y_rul, t_stop=t_stop, evento=evento)
 
-        return cls(
-            pipeline=pipeline,
-            model=model,
-            model_name=model_name,
-        )
+        return cls(pipeline=pipeline, model=model, model_name=model_name)
 
     def save(
         self,
@@ -318,9 +306,7 @@ class RULProductionPredictor(BaseEstimator, RegressorMixin):
     ):
         """Serializes the predictor and writes its JSON metadata.
 
-        Convenience wrapper over predictor_io.save_predictor() — allows
-        saving the predictor directly from the object without explicitly
-        importing the I/O module.
+        Convenience wrapper over predictor_io.save_predictor().
 
         Args:
             metrics: Dict with GGS cross-validation metrics. Recommended
@@ -336,7 +322,7 @@ class RULProductionPredictor(BaseEstimator, RegressorMixin):
         from pathlib import Path
         from src.utils.predictor_io import save_predictor, _DEFAULT_BASE_DIR
 
-        resolved_metrics  = metrics  if metrics  is not None else {}
+        resolved_metrics  = metrics   if metrics   is not None else {}
         resolved_base_dir = Path(base_dir) if base_dir is not None else _DEFAULT_BASE_DIR
 
         return save_predictor(
@@ -369,37 +355,33 @@ class RULProductionPredictor(BaseEstimator, RegressorMixin):
     ) -> np.ndarray:
         """Generates RUL predictions from a raw sensor DataFrame.
 
-        Applies the full pipeline (Nodo 2 → Nodo 3 → Nodo 4) on the input
-        DataFrame using the trained transformers, then calls
-        model.predict_with_time(X, t_stop) to obtain RUL predictions.
+        Applies the full pipeline (windowing → feature extraction →
+        dimensionality reduction) on the input DataFrame using the trained
+        transformers, then calls model.predict_with_time(X, t_stop).
 
         t_stop is extracted directly from pipeline.transform() — it represents
         the last observed cycle of each sliding window, computed from
-        time_in_cycles in the input DataFrame without any additional
-        computation. Regression models ignore t_stop via the BaseRULModel
-        default; survival models use it to compute RUL = t* - t_stop.
+        time_in_cycles in the input DataFrame. Regression models ignore t_stop
+        via the BaseRULModel default; survival models use it to compute
+        RUL = t* - t_stop.
 
         Args:
             X_df: Sensor history DataFrame for the motor to evaluate. Must
                 contain at least window_size cycles. Required columns:
-                time_in_cycles and the 16 sensor columns used in training.
+                time_in_cycles and the sensor columns used in training.
                 unit_number is optional — if absent, id=0 is assigned.
             return_mode: Output mode. One of:
-                - 'last' (default): returns only the last window prediction
-                  — the RUL estimate at the current cycle. Shape (1,).
-                - 'all': returns predictions for all generated windows.
-                  Useful for visualizing the degradation trajectory.
-                  Shape (n_windows,).
+                - 'last' (default): returns the last window prediction.
+                  Shape (1,).
+                - 'all': returns predictions for all windows. Shape (n_windows,).
 
         Returns:
             Predicted RUL array clipped to clipping_threshold.
-            Shape (1,) if return_mode='last', (n_windows,) if return_mode='all'.
 
         Raises:
             ValueError: If X_df has fewer cycles than window_size.
             ValueError: If return_mode is not 'last' or 'all'.
-            NotFittedError: If the object was not built correctly
-                (pipeline_ or model_ absent).
+            NotFittedError: If pipeline_ or model_ are absent.
         """
         check_is_fitted(self, ['pipeline_', 'model_'])
 
@@ -408,19 +390,12 @@ class RULProductionPredictor(BaseEstimator, RegressorMixin):
                 f"return_mode must be 'last' or 'all', got '{return_mode}'."
             )
 
-        # transform() without y_df — production mode without ground truth.
-        # t_stop is extracted by the pipeline from time_in_cycles.
         X, _y_rul, t_stop, _evento, _groups = self.pipeline_.transform(
-            X_df,
-            y_df=None,
+            X_df, y_df=None,
         )
 
-        # predict_with_time() is the uniform interface for all model families.
-        # Regression models delegate to predict(X) via BaseRULModel default.
-        # Survival models compute RUL = t* - t_stop via their override.
         y_pred = self.model_.predict_with_time(X, t_stop)
 
         if return_mode == 'last':
             return y_pred[-1:]
-
         return y_pred

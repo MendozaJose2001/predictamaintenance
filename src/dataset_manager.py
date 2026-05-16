@@ -147,18 +147,17 @@ class DatasetManager:
             Unified DataFrame with columns from both partitions, including RUL
             and evento for every row.
         """
-        # Load raw files
         df_train = _get_txt('train')
-        df_test = _get_txt('test')
-        df_true = _get_txt('true')
+        df_test  = _get_txt('test')
+        df_true  = _get_txt('true')
 
-        # Compute RUL for train engines (observed failures)
+        # Compute RUL for train engines (observed failures).
         # RUL decreases from max_cycles to 0 at the last observed cycle.
         # evento=1 only at the last cycle of each motor — not for all rows.
         # Assigning evento=1 to all rows would create multiple events per motor,
         # violating the single terminal event assumption of Cox and AFT models.
         max_cycles_train = df_train.groupby('unit_number')['time_in_cycles'].transform('max')
-        df_train['RUL'] = max_cycles_train - df_train['time_in_cycles']
+        df_train['RUL']    = max_cycles_train - df_train['time_in_cycles']
         df_train['evento'] = (df_train['time_in_cycles'] == max_cycles_train).astype(int)
 
         # Offset test unit IDs to avoid collisions with train IDs
@@ -170,23 +169,23 @@ class DatasetManager:
             df_test.groupby('unit_number')['time_in_cycles']
             .max()
             .reset_index()
-            .rename(columns={'time_in_cycles': 'ultimo_ciclo_archivo'})
+            .rename(columns={'time_in_cycles': 'last_cycle'})
         )
-        vida_total_test = pd.merge(max_cycles_test, df_true, on='unit_number')
-        vida_total_test['vida_total'] = (
-            vida_total_test['ultimo_ciclo_archivo'] + vida_total_test['true_RUL']
+        total_lifetime = pd.merge(max_cycles_test, df_true, on='unit_number')
+        total_lifetime['total_lifetime'] = (
+            total_lifetime['last_cycle'] + total_lifetime['true_RUL']
         )
 
         # Compute per-row RUL for test engines (right-censored)
         df_test = df_test.merge(
-            vida_total_test[['unit_number', 'vida_total']], on='unit_number'
+            total_lifetime[['unit_number', 'total_lifetime']], on='unit_number'
         )
-        df_test['RUL'] = df_test['vida_total'] - df_test['time_in_cycles']
+        df_test['RUL']    = df_test['total_lifetime'] - df_test['time_in_cycles']
         df_test['evento'] = 0
 
         unified = pd.concat(
-            [df_train, df_test.drop(columns=['vida_total'])],
-            ignore_index=True
+            [df_train, df_test.drop(columns=['total_lifetime'])],
+            ignore_index=True,
         )
 
         return unified
@@ -243,15 +242,15 @@ class DatasetManager:
         stats = df.describe().T
         stats['IQR'] = stats['75%'] - stats['25%']
 
-        cols_consts = stats[stats['IQR'] == 0].index.tolist()
+        zero_var_cols = stats[stats['IQR'] == 0].index.tolist()
 
-        protected = _columnas['identificadores'] + ['RUL', 'evento']
-        cols_consts = [c for c in cols_consts if c not in protected]
+        protected     = _columnas['identificadores'] + ['RUL', 'evento']
+        zero_var_cols = [c for c in zero_var_cols if c not in protected]
 
-        clean_df = df.drop(columns=cols_consts)
+        clean_df = df.drop(columns=zero_var_cols)
 
-        print(f"Zero-variance columns detected: {len(cols_consts)}")
-        print(f"Columns removed: {cols_consts}")
+        print(f"Zero-variance columns detected: {len(zero_var_cols)}")
+        print(f"Columns removed: {zero_var_cols}")
 
         return clean_df, stats
 
@@ -275,13 +274,13 @@ class DatasetManager:
             Tuple of (units_train, units_test) containing the unit_number
             arrays for each partition.
         """
-        df = pd.read_csv('data/metadata.csv')
-        unidades = df['unit_number'].unique()
+        df    = pd.read_csv('data/metadata.csv')
+        units = df['unit_number'].unique()
 
-        unidades_train, unidades_test = train_test_split(
-            unidades,
+        units_train, units_test = train_test_split(
+            units,
             test_size=test_size,
-            random_state=random_state
+            random_state=random_state,
         )
 
-        return unidades_train, unidades_test
+        return units_train, units_test

@@ -1,3 +1,5 @@
+#./src/analysis/plot_analysis.py
+
 """Visualisation functions for test set analysis in PredictaMaintenance.
 
 Provides trajectory plots, error plots, and per-motor boxplots for the
@@ -107,7 +109,7 @@ def _load_plot_data(
     motores_plot       = _select_representative_motors(df_test, m_test)
 
     if debug:
-        print(f"Motores con fallo observado seleccionados:")
+        print(f"Motors with observed failure selected:")
         for label, mid in motores_plot.items():
             print(f"  {label} — ID: {mid}")
 
@@ -190,7 +192,7 @@ def plot_per_motor_boxplots(debug: bool = False) -> None:
         patch.set_alpha(0.75)
     axes[0].set_xticks(range(1, len(labels_ordered) + 1))
     axes[0].set_xticklabels(labels_ordered, rotation=20, ha='right', fontsize=9)
-    axes[0].set_title('S-Score por motor (↓ mejor)', fontweight='bold')
+    axes[0].set_title('S-Score per motor (↓ better)', fontweight='bold')
     axes[0].set_ylabel('S-Score')
     axes[0].grid(True, alpha=0.3, axis='y')
 
@@ -208,12 +210,12 @@ def plot_per_motor_boxplots(debug: bool = False) -> None:
         patch.set_alpha(0.75)
     axes[1].set_xticks(range(1, len(labels_ordered) + 1))
     axes[1].set_xticklabels(labels_ordered, rotation=20, ha='right', fontsize=9)
-    axes[1].set_title('C-Index por motor (↑ mejor)', fontweight='bold')
+    axes[1].set_title('C-Index per motor (↑ better)', fontweight='bold')
     axes[1].set_ylabel('C-Index')
     axes[1].grid(True, alpha=0.3, axis='y')
 
     plt.suptitle(
-        'Subanálisis 3 — Distribución del error por motor | Test set (60 motores)',
+        'Per-motor Error Distribution — Test set (60 motors)',
         fontsize=12, fontweight='bold',
     )
     plt.tight_layout()
@@ -246,7 +248,7 @@ def plot_trayectorias_absolutas(
         ciclos   = np.arange(n_win)
 
         ax.plot(ciclos, y_true_m,
-                color='black', lw=2.5, ls='-', label='RUL real', zorder=5)
+                color='black', lw=2.5, ls='-', label='Real RUL', zorder=5)
 
         for key, style in MODEL_STYLE.items():
             mask_k   = results[key]['groups'] == motor_id
@@ -257,19 +259,19 @@ def plot_trayectorias_absolutas(
 
         if log_scale:
             ax.set_yscale('log')
-            ax.set_ylabel('RUL (ciclos, escala log)')
+            ax.set_ylabel('RUL (cycles, log scale)')
         else:
             ax.set_ylim(bottom=0)
-            ax.set_ylabel('RUL (ciclos)')
+            ax.set_ylabel('RUL (cycles)')
 
         ax.set_title(titulo, fontsize=10, fontweight='bold')
-        ax.set_xlabel('Ciclo relativo (ventana)')
+        ax.set_xlabel('Relative cycle (window)')
         ax.grid(True, alpha=0.3)
 
     _add_shared_legend(fig, axes, ncol=6)
     plt.suptitle(
-        'Trayectorias de RUL — Test set | Todos los modelos vs RUL real\n'
-        'Solo motores con fallo observado (evento=1)',
+        'RUL Trajectories — Test set | All models vs real RUL\n'
+        'Motors with observed failure only (evento=1)',
         fontsize=12, fontweight='bold',
     )
     plt.tight_layout()
@@ -301,9 +303,9 @@ def plot_trayectorias_error(
         ciclos   = np.arange(n_win)
 
         ax.axhline(0, color='black', lw=2.0, ls='-',
-                   label='Error = 0 (perfecto)', zorder=5)
+                   label='Error = 0 (perfect)', zorder=5)
         ax.axhspan(-10, 10, alpha=0.06, color='green',
-                   label='Zona ±10 ciclos')
+                   label='±10 cycle band')
 
         for key, style in MODEL_STYLE.items():
             mask_k   = results[key]['groups'] == motor_id
@@ -316,18 +318,18 @@ def plot_trayectorias_error(
 
         if log_scale:
             ax.set_yscale('symlog', linthresh=10)
-            ax.set_ylabel('Error (ciclos, escala symlog)')
+            ax.set_ylabel('Error (cycles, symlog scale)')
         else:
-            ax.set_ylabel('Error (ciclos)  [+ sobreestima | − subestima]')
+            ax.set_ylabel('Error (cycles)  [+ overestimates | − underestimates]')
 
         ax.set_title(titulo, fontsize=10, fontweight='bold')
-        ax.set_xlabel('Ciclo relativo (ventana)')
+        ax.set_xlabel('Relative cycle (window)')
         ax.grid(True, alpha=0.3)
 
     _add_shared_legend(fig, axes, ncol=7, bbox=(0.5, -0.10))
     plt.suptitle(
-        'Error de predicción por ciclo relativo — Test set\n'
-        'Error = RUL predicho − RUL real  |  Positivo = sobreestima (peligroso)',
+        'Prediction error per relative cycle — Test set\n'
+        'Error = predicted RUL − real RUL  |  Positive = overestimate (dangerous)',
         fontsize=12, fontweight='bold',
     )
     plt.tight_layout()

@@ -1,3 +1,5 @@
+#./src/analysis/ggs_analysis.py
+
 """GGS results analysis functions for PredictaMaintenance.
 
 Provides utilities to load, summarise, and inspect the output CSV files
@@ -85,11 +87,11 @@ def get_results_resume(model_key: str) -> None:
 
     model_display = MODEL_NAMES.get(model_key, model_key)
     print(f"Model:                 {model_display}")
-    print(f"Total configuraciones: {total}")
-    print(f"Exitosas:              {exitosas}")
-    print(f"Fallidas (NaN):        {fallidas}")
-    print(f"Duplicados:            {n_duplicados}")
-    print(f"Únicas:                {total - n_duplicados}")
+    print(f"Total configurations:  {total}")
+    print(f"Successful:            {exitosas}")
+    print(f"Failed (NaN):          {fallidas}")
+    print(f"Duplicates:            {n_duplicados}")
+    print(f"Unique:                {total - n_duplicados}")
 
 
 def view_top_results(model_key: str, top_n: int = 10) -> None:
